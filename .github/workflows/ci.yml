@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          # Base install only (no Coqui XTTS); README/setup.bat use .[speak-xtts] for neural TTS.
+          pip install -e .
+
+      - name: Smoke test (WinRT synthesis)
+        run: python scripts/smoke_test.py
+
+      - name: Integration check (protocol, defaults, hotkey builder)
+        run: python scripts/verify_integration.py
+
+      - name: Unit tests (live-rate resume offset)
+        run: python -m unittest tests.test_wav_play_win32 -v

@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "narrator"
+version = "0.3.9"
+description = "Windows narrator: Ctrl+Alt+S TTS from hover, Ctrl+Alt+L STT into focus (UI Automation; WinRT + optional Piper/XTTS; setup.bat auto-detects NVIDIA for CUDA PyTorch)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "audiotsm>=0.1.2",
+    "librosa>=0.10.0",
+    "pynput==1.8.1",
+    "pyperclip==1.9.0",
+    "uiautomation==2.0.29",
+    "winrt-runtime==3.2.1",
+    "winrt-Windows.Foundation==3.2.1",
+    # IVector for SpeechRecognizer.constraints (listen / WinRT dictation).
+    "winrt-Windows.Foundation.Collections==3.2.1",
+    "winrt-Windows.Media.SpeechSynthesis==3.2.1",
+    "winrt-Windows.Media.SpeechRecognition==3.2.1",
+    "winrt-Windows.Storage.Streams==3.2.1",
+]
+
+[project.optional-dependencies]
+tray = [
+    "pystray>=0.19.5",
+    "pillow>=10.0.0",
+]
+# Neural punctuation for listen (commas, periods, ? without speaking punctuation words). Large download.
+listen = [
+    "deepmultilingualpunctuation>=1.0.1",
+    # deepmultilingualpunctuation passes grouped_entities to TokenClassificationPipeline (removed in transformers 5.x).
+    "transformers>=4.30.0,<5",
+    "torch>=2.0.0",
+]
+# High-quality listen: faster-whisper + microphone capture (batch transcribe when you release the listen hotkey).
+listen-whisper = [
+    "faster-whisper>=1.0.0",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24.0",
+]
+# Coqui XTTS neural TTS: PyTorch + torchaudio + coqui-tts; large download; GPU optional.
+# torchaudio is required at import time for Coqui TTS even on CPU (not only neural-gpu CUDA upgrades).
+speak-xtts = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    # [codec]: PyTorch 2.9+ expects torchcodec for audio IO inside Coqui.
+    "coqui-tts[codec]>=0.24.0",
+    # Coqui 0.27.x is incompatible with transformers 5.x (pytorch_utils API).
+    "transformers>=4.57,<5",
+]
+# Piper neural TTS (ONNX + onnxruntime); small voice downloads from rhasspy/piper-voices.
+# Pin numpy major for onnxruntime wheels on Windows (avoids pybind / DLL edge cases with numpy 2.4+).
+speak-piper = [
+    "piper-tts>=1.2.0",
+    "numpy>=1.26,<2.1",
+    "onnxruntime>=1.16.0,<2",
+]
+dev = [
+    "pyinstaller>=6.0.0",
+]
+# Mic → WAV capture for loopback diagnostics (speaker → mic). See scripts/audio_loopback_record.py.
+audio-test = [
+    "sounddevice>=0.4.6",
+]
+
+[project.scripts]
+narrator = "narrator.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["narrator*"]

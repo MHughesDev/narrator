@@ -1,0 +1,40 @@
+# Copy to %USERPROFILE%\.config\narrator\config.toml or %LOCALAPPDATA%\narrator\config.toml
+# After: pip install -e ".[speak-xtts,speak-piper]" (or run setup.bat)
+#
+# === Standard speak (same as omitting these keys) ===
+# All speak_exclude_* on, and paragraph-only pauses (no extra pause on every line).
+# Uncomment only to override.
+
+speak_engine = "auto"
+# speak_exclude_hyperlinks = true
+# speak_exclude_math = true
+# speak_exclude_markup = true
+# speak_exclude_citations = true
+# speak_exclude_technical = true
+# speak_exclude_chrome = true
+# speak_exclude_emoji = true
+# speak_insert_line_pauses = true
+# speak_pause_between_lines = false
+# speak_winrt_use_ssml_breaks = true
+# speak_pause_line_ms = 320
+# speak_pause_paragraph_ms = 520
+
+# With auto: XTTS uses voice/xtts_* below; Piper uses piper_voice only if Coqui is unavailable.
+voice = "Ana Florence"
+xtts_model = "tts_models/multilingual/multi-dataset/xtts_v2"
+xtts_speaker = "Ana Florence"
+xtts_language = "en"
+xtts_device = "auto"
+# Piper fallback (auto when Coqui missing) or when speak_engine = "piper":
+piper_voice = "en_US-ryan-high"
+# Force Piper even with Coqui: speak_engine = "piper"
+
+# Live rate during playback (Ctrl+Alt+Plus/Minus) — optional; env NARRATOR_* overrides these.
+# Default: chunk-boundary resume (no echo). Uncomment for sample-accurate seek (may echo on some PCs):
+# live_rate_safe_chunk_discard = false
+# live_rate_resume_slack_ms = 280
+# post_waveout_close_drain_s = 0.35
+# Default: real-time speed while speaking (WSOLA — pitch-preserving). Uncomment for next-utterance only:
+# live_rate_defer_during_playback = true
+# Optional: phase_vocoder | resample
+# live_rate_in_play_engine = "phase_vocoder"

@@ -1,0 +1,8 @@
+pynput==1.8.1
+pyperclip==1.9.0
+uiautomation==2.0.29
+winrt-runtime==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Media.SpeechSynthesis==3.2.1
+winrt-Windows.Media.SpeechRecognition==3.2.1
+winrt-Windows.Storage.Streams==3.2.1

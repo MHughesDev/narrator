@@ -1,0 +1,42 @@
+# Virtual environments
+.venv/
+.venv311/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+
+# Installer / coverage
+htmlcov/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# PyInstaller
+*.spec.bak
+
+# Local mic loopback captures
+audio_selftest_logs/
+test_audio_tmp/
+
+# Local automation / UI automation debug logs
+@AutomationLog.txt
