@@ -2,25 +2,33 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-echo.
-echo  Narrator — automatic setup (hardware-aware)
-echo  ----------------------------------------------
+echo Narrator setup  (verbose: set NARRATOR_SETUP_VERBOSE=1^)
 echo.
 
 set "USE_PY=0"
 where python >nul 2>&1 && goto have_python
 where py >nul 2>&1 || goto no_python
 set "USE_PY=1"
-echo Note: "python" not on PATH — using Windows "py" launcher.
+echo Using py launcher ^(python not on PATH^)
 goto make_venv
 
 :have_python
 set "USE_PY=0"
 
 :make_venv
+if "%USE_PY%"=="1" (
+  py -3 -c "import sys; v=sys.version_info; raise SystemExit(0 if (3,11)<=(v.major,v.minor)<(3,15) else 1)" 2>nul
+) else (
+  python -c "import sys; v=sys.version_info; raise SystemExit(0 if (3,11)<=(v.major,v.minor)<(3,15) else 1)" 2>nul
+)
+if errorlevel 1 (
+  echo [ERROR] Need Python 3.11-3.14.  winget install Python.Python.3.12  then new terminal.
+  goto fail
+)
+
 if exist ".venv\Scripts\python.exe" goto install_deps
 
-echo Creating virtual environment .venv ...
+echo Creating .venv ...
 if "%USE_PY%"=="1" (
   py -3 -m venv .venv 2>nul
   if errorlevel 1 py -m venv .venv
@@ -33,25 +41,17 @@ if errorlevel 1 (
 )
 
 :install_deps
-REM Use venv python.exe directly — "call activate.bat" fails on some systems and leaves PATH python
-REM (then pip installs to user site-packages and neural DLLs break under Python 3.14).
 set "VENVPY=%~dp0.venv\Scripts\python.exe"
 if not exist "%VENVPY%" (
   echo [ERROR] Missing "%VENVPY%"
   goto fail
 )
-echo Using venv Python:
-echo   %VENVPY%
-echo Ensuring pip in venv...
 "%VENVPY%" -m ensurepip --upgrade 2>nul
-"%VENVPY%" -m pip install --upgrade pip setuptools wheel -q
+"%VENVPY%" -m pip install --upgrade pip "setuptools>=61,<82" wheel -q
 
-REM Optional override: set NARRATOR_SETUP_PROFILE=minimal ^| neural-cpu ^| neural-gpu
 if not "%NARRATOR_SETUP_PROFILE%"=="" (
-  echo Using profile from NARRATOR_SETUP_PROFILE=%NARRATOR_SETUP_PROFILE%
   "%VENVPY%" scripts\bootstrap_install.py --profile %NARRATOR_SETUP_PROFILE%
 ) else (
-  echo Running hardware scan and installing ^(see scripts\hw_detect.py^)...
   "%VENVPY%" scripts\bootstrap_install.py --auto
 )
 
@@ -60,30 +60,19 @@ if errorlevel 1 (
   goto fail
 )
 
+"%VENVPY%" scripts\ensure_cuda_torch.py
+if errorlevel 1 (
+  echo [WARN] ensure_cuda_torch issue — see docs\SETUP.md
+)
+
 echo.
-echo  Done.
-echo    Run:  run_narrator.bat
-echo      or:  python -m narrator
-echo.
-echo  Profiles:  set NARRATOR_SETUP_PROFILE=minimal   ^(WinRT only, smallest^)
-echo              set NARRATOR_SETUP_PROFILE=neural-cpu ^(force CPU PyTorch^)
-echo              set NARRATOR_SETUP_PROFILE=neural-gpu ^(force CUDA PyTorch if NVIDIA present^)
-echo.
-echo  Optional — tray icon + Quit:
-echo    pip install -e ".[tray]"
-echo    run_narrator_tray.bat
+echo Done.  run.bat
 echo.
 pause
 exit /b 0
 
 :no_python
-echo [ERROR] Python was not found.
-echo.
-echo  Install Python 3.11+ from https://www.python.org/downloads/
-echo  ^(enable "Add python.exe to PATH"^), or in PowerShell ^(Admin^) try:
-echo    winget install Python.Python.3.12
-echo.
-echo Then open a NEW terminal and run setup.bat again.
+echo [ERROR] Python not found.  winget install Python.Python.3.12
 goto fail
 
 :fail

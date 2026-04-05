@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+_scripts = Path(__file__).resolve().parent
+if str(_scripts) not in sys.path:
+    sys.path.insert(0, str(_scripts))
+from setup_terminal import setup_verbose  # noqa: E402
 
 
 def main() -> int:
+    verbose = setup_verbose()
     errors: list[str] = []
 
     def check(label: str, fn) -> None:
@@ -26,9 +33,10 @@ def main() -> int:
     def imp_torch() -> None:
         import torch
 
-        print("torch", torch.__version__, "| CUDA available:", torch.cuda.is_available())
-        if torch.cuda.is_available():
-            print("  CUDA device:", torch.cuda.get_device_name(0))
+        if verbose:
+            print("torch", torch.__version__, "| CUDA available:", torch.cuda.is_available())
+            if torch.cuda.is_available():
+                print("  CUDA device:", torch.cuda.get_device_name(0))
 
     def imp_tts() -> None:
         import TTS  # noqa: F401
@@ -36,10 +44,12 @@ def main() -> int:
     def imp_onnx() -> None:
         import onnxruntime as ort
 
-        print("onnxruntime", ort.__version__, "| providers:", ort.get_available_providers())
+        if verbose:
+            print("onnxruntime", ort.__version__, "| providers:", ort.get_available_providers())
 
     # Neural imports must run before WinRT in this process: otherwise torch fails (WinError 1114 on c10.dll).
-    print("Neural TTS (speak-xtts / speak-piper extras):")
+    if verbose:
+        print("Neural TTS (speak-xtts / speak-piper extras):")
     check("torch", imp_torch)
     check("TTS (coqui-tts)", imp_tts)
     check("onnxruntime", imp_onnx)
@@ -52,7 +62,8 @@ def main() -> int:
         neural_errors = []
     errors.clear()
 
-    print("Core (required):")
+    if verbose:
+        print("Core (required):")
     check("winrt", imp_winrt)
     check("pynput", imp_pynput)
     check("uiautomation", imp_uia)
@@ -62,24 +73,24 @@ def main() -> int:
         print("Install: pip install -e .", file=sys.stderr)
         return 1
 
-    print("  OK — WinRT / hotkeys / UIA")
+    if verbose:
+        print("  OK — WinRT / hotkeys / UIA")
 
     if neural_errors:
         return 2
 
-    print("  OK — torch / Coqui / onnxruntime")
+    if verbose:
+        print("  OK — torch / Coqui / onnxruntime")
+        try:
+            import onnxruntime as ort
 
-    try:
-        import onnxruntime as ort
-
-        if "CUDAExecutionProvider" in ort.get_available_providers():
-            print("  Note: ONNX Runtime has CUDA — Piper can use --piper-cuda")
-        else:
-            print("  Note: ONNX Runtime CPU — Piper uses CPU unless you install onnxruntime-gpu")
-    except Exception:
-        pass
-
-    print("OK: environment looks ready for narrator (core + neural TTS).")
+            if "CUDAExecutionProvider" in ort.get_available_providers():
+                print("  Note: ONNX Runtime has CUDA — Piper can use --piper-cuda")
+            else:
+                print("  Note: ONNX Runtime CPU — Piper uses CPU unless you install onnxruntime-gpu")
+        except Exception:
+            pass
+        print("OK: environment looks ready for narrator (core + neural TTS).")
     return 0
 
 

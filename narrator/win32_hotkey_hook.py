@@ -1,4 +1,4 @@
-"""Windows WH_KEYBOARD_LL hook: consume chord key events so they do not reach other apps.
+"""Windows WH_KEYBOARD_LL hook: consume speak/listen chord key events so they do not reach other apps.
 
 ``pynput.GlobalHotKeys`` cannot suppress only our chords; ``suppress=True`` swallows every key.
 We install a low-level hook in a thread with a message loop and return non-zero from the hook
@@ -19,7 +19,7 @@ from ctypes import wintypes
 
 logger = logging.getLogger(__name__)
 
-from narrator.protocol import LISTEN_TOGGLE, SPEAK_RATE_DOWN, SPEAK_RATE_UP, SPEAK_TOGGLE
+from narrator.protocol import LISTEN_TOGGLE, SPEAK_TOGGLE
 
 WH_KEYBOARD_LL = 13
 HC_ACTION = 0
@@ -32,14 +32,6 @@ WM_QUIT = 0x0012
 VK_CONTROL = 0x11
 VK_SHIFT = 0x10
 VK_MENU = 0x12  # Alt
-# Ctrl+Alt+Plus/Minus (main keyboard and numpad): speaking-rate adjust during TTS playback
-VK_OEM_PLUS = 0xBB
-VK_OEM_MINUS = 0xBD
-VK_ADD = 0x6B
-VK_SUBTRACT = 0x6D
-RATE_PLUS_VKS = frozenset({VK_OEM_PLUS, VK_ADD})
-RATE_MINUS_VKS = frozenset({VK_OEM_MINUS, VK_SUBTRACT})
-RATE_MODS = frozenset({"ctrl", "alt"})
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 
@@ -241,30 +233,8 @@ class SuppressingHotKeyHook:
                             self_ref._listen_queue.put(LISTEN_TOGGLE)
                             self_ref._swallow_l_up = True
                         return 1
-                    if vk in RATE_PLUS_VKS and _mods_down(RATE_MODS):
-                        if not self_ref._rate_plus_held:
-                            self_ref._rate_plus_held = True
-                            self_ref._speak_queue.put(SPEAK_RATE_UP)
-                            self_ref._swallow_rate_plus_up = True
-                        return 1
-                    if vk in RATE_MINUS_VKS and _mods_down(RATE_MODS):
-                        if not self_ref._rate_minus_held:
-                            self_ref._rate_minus_held = True
-                            self_ref._speak_queue.put(SPEAK_RATE_DOWN)
-                            self_ref._swallow_rate_minus_up = True
-                        return 1
 
                 if msg in (WM_KEYUP, WM_SYSKEYUP):
-                    if vk in RATE_PLUS_VKS:
-                        self_ref._rate_plus_held = False
-                        if self_ref._swallow_rate_plus_up:
-                            self_ref._swallow_rate_plus_up = False
-                            return 1
-                    if vk in RATE_MINUS_VKS:
-                        self_ref._rate_minus_held = False
-                        if self_ref._swallow_rate_minus_up:
-                            self_ref._swallow_rate_minus_up = False
-                            return 1
                     if vk == self_ref._svk:
                         self_ref._speak_trigger_held = False
                         if self_ref._swallow_s_up:

@@ -90,7 +90,7 @@ After preprocessing, the speak path may **insert pauses** at paragraph breaks (d
 ## 4. Speech
 
 1. Use **offline** Windows speech (WinRT `SpeechSynthesizer` per architecture).
-2. Synthesize to a **temporary WAV** (in-memory or on disk), then play via a **stoppable** path (e.g. `winsound` with purge on stop).
+2. Synthesize to a **temporary WAV** (in-memory or on disk), then play via a **stoppable** path — primary implementation uses **Win32 `waveOut`** with explicit open/write/reset/close (see [`narrator/wav_play_win32.py`](narrator/wav_play_win32.py)); optional **PortAudio** / `sounddevice` when `audio_output_backend` is set accordingly in settings.
 3. Default voice: **system default** for the synthesizer unless overridden by CLI (future: explicit voice id).
 
 ---

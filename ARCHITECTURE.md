@@ -18,6 +18,7 @@ This document turns [`IDEA.md`](IDEA.md) into **implementation-facing** decision
 - [`IDEA.md`](IDEA.md) — *what* we build and *why*.
 - **This file** — *how* we structure the system and *which* stacks we use.
 - [`SPEC.md`](SPEC.md) — exact toggle semantics, capture rules, and error strings.
+- [`docs/TTS_PLAYBACK_ROADMAP.md`](docs/TTS_PLAYBACK_ROADMAP.md) — *end-to-end* speak path: preprocess, chunking, per-engine synthesis, prefetch, playback quality and knobs.
 
 ---
 
@@ -189,6 +190,8 @@ Fixed pipeline on **speak_toggle** while idle:
 - **Piper:** `narrator/tts_piper.py`; **`--list-piper-voices`**; prefetch via **`scripts/prefetch_piper_voice.py`** (used by **`setup.bat`**).
 - **XTTS:** `narrator/tts_xtts.py` — `get_tts`, `synthesize_xtts_to_path`; **`--list-xtts-speakers`**; prefetch via **`scripts/prefetch_xtts_model.py`** (used by **`setup.bat`**).
 - **Synthesis + stop:** `narrator/speech.py` — dispatches WinRT (asyncio + cancellable) vs Piper/XTTS (thread + blocking); playback via **`narrator/wav_play_win32`**.
+
+**Pipeline detail (preprocess → chunk → prefetch → fades):** [`docs/TTS_PLAYBACK_ROADMAP.md`](docs/TTS_PLAYBACK_ROADMAP.md).
 
 ---
 

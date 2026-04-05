@@ -1,11 +1,13 @@
-"""Single-flight control for TTS PCM playback (``winmm`` ``waveOut``).
+"""Single-flight control for TTS PCM playback (``winmm`` ``waveOut`` or optional PortAudio).
 
-The speak worker calls :func:`narrator.wav_play_win32.play_wav_interruptible` on one thread; that
+The speak worker calls :func:`narrator.speech.play_wav_interruptible` on one thread; that
 function must not run re-entrantly. A process-wide lock ensures only one playback session exists at
 a time, so speed hotkeys cannot start a second stream alongside the first.
 
 By default, speed hotkeys adjust the **remainder** of the current clip (``live_rate_in_play_engine``,
 usually WSOLA). ``live_rate_defer_during_playback`` makes hotkeys apply only to the **next** utterance.
+``audio_output_backend = sounddevice`` uses PortAudio and defers in-play stretch (next utterance only).
+Optional remainder **re-synthesis** on rate change: ``live_rate_resynth_remainder``.
 All in-play handling is inside ``play_wav_interruptible`` — not separate threads or processes.
 
 Use :func:`playback_gate_held` instead of acquiring :data:`playback_gate` directly so

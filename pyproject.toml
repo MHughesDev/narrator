@@ -7,7 +7,7 @@ name = "narrator"
 version = "0.3.9"
 description = "Windows narrator: Ctrl+Alt+S TTS from hover, Ctrl+Alt+L STT into focus (UI Automation; WinRT + optional Piper/XTTS; setup.bat auto-detects NVIDIA for CUDA PyTorch)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 license = { text = "MIT" }
 dependencies = [
     "numpy>=1.26",
@@ -62,11 +62,21 @@ speak-piper = [
 ]
 dev = [
     "pyinstaller>=6.0.0",
+    "pytest>=8.0.0",
 ]
 # Mic → WAV capture for loopback diagnostics (speaker → mic). See scripts/audio_loopback_record.py.
 audio-test = [
     "sounddevice>=0.4.6",
 ]
+# Optional PortAudio playback: ``audio_output_backend = "sounddevice"`` (see settings_schema.md).
+audio-output = [
+    "sounddevice>=0.4.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/MHughesDev/narrator"
+Repository = "https://github.com/MHughesDev/narrator"
+Issues = "https://github.com/MHughesDev/narrator/issues"
 
 [project.scripts]
 narrator = "narrator.__main__:main"
@@ -74,3 +84,6 @@ narrator = "narrator.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["narrator*"]
+
+[tool.setuptools.package-data]
+narrator = ["default_speak_text_llm_rules.txt"]

@@ -1,4 +1,4 @@
-"""Persisted speaking rate (Ctrl+Alt+/-)."""
+"""Persisted speaking rate state file (runtime always uses 1.0 for now)."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def test_save_roundtrip(isolated_state_dir: Path) -> None:
     assert load_persisted_speaking_rate() == pytest.approx(1.3)
 
 
-def test_build_runtime_settings_uses_persisted(isolated_state_dir: Path) -> None:
+def test_build_runtime_settings_ignores_persisted_rate(isolated_state_dir: Path) -> None:
     from narrator.settings import build_runtime_settings
     from narrator.user_state import save_persisted_speaking_rate
 
@@ -53,10 +53,10 @@ def test_build_runtime_settings_uses_persisted(isolated_state_dir: Path) -> None
         silent=False,
         verbose=False,
     )
-    assert r.speaking_rate == pytest.approx(1.7)
+    assert r.speaking_rate == pytest.approx(1.0)
 
 
-def test_cli_rate_overrides_persisted(isolated_state_dir: Path) -> None:
+def test_build_runtime_settings_ignores_cli_rate(isolated_state_dir: Path) -> None:
     from narrator.settings import build_runtime_settings
     from narrator.user_state import save_persisted_speaking_rate
 
@@ -72,4 +72,4 @@ def test_cli_rate_overrides_persisted(isolated_state_dir: Path) -> None:
         silent=False,
         verbose=False,
     )
-    assert r.speaking_rate == pytest.approx(1.1)
+    assert r.speaking_rate == pytest.approx(1.0)

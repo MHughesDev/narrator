@@ -42,6 +42,16 @@ def main() -> int:
     assert r.live_rate_safe_chunk_discard is True
     assert r.live_rate_defer_during_playback is False
     assert r.live_rate_in_play_engine == "wsola"
+    assert r.pcm_edge_fade_ms == 8.0
+    assert r.live_rate_settle_ms == 45.0
+    assert r.live_rate_extreme_ratio_threshold == 1.12
+    assert r.live_rate_min_handoff_interval_s == 0.0
+    assert r.live_rate_resynth_remainder is True
+    assert r.audio_output_backend == "waveout"
+    assert r.segment_crossfade_ms == 24.0
+    assert r.pcm_peak_normalize is True
+    assert r.post_reset_silence_ms == 12.0
+    assert r.segment_transition_preset == "engine"
 
     assert "http" not in prepare_speak_text("see [a](https://ex.com)", exclude_hyperlinks=True, exclude_math=False).lower()
     assert prepare_speak_text(r"$\frac{1}{2}$", exclude_hyperlinks=False, exclude_math=True) == ""

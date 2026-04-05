@@ -16,10 +16,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from narrator import audio_debug
+from narrator.audio_pcm import (
+    pcm_apply_crossfade_overlap_s16,
+    pcm_extract_tail_s16,
+    pcm_highpass_sosfilt_s16,
+    pcm_peak_normalize_s16,
+    pcm_prepend_silence_s16,
+)
 from narrator.playback_control import playback_gate_held
+from narrator.playback_result import PlayWavResult
+from narrator.playback_telemetry import record as playback_telemetry_record
 from narrator.protocol import SHUTDOWN, SPEAK_RATE_DOWN, SPEAK_RATE_UP, SPEAK_TOGGLE
-from narrator.user_state import save_persisted_speaking_rate
-
+from narrator.segment_transitions import resolve_playback_transition
 if TYPE_CHECKING:
     from narrator.settings import RuntimeSettings
 
@@ -60,23 +68,12 @@ CALLBACK_NULL = 0
 WHDR_DONE = 0x00000001
 MMSYSERR_NOERROR = 0
 
-RATE_STEP = 0.1
-
-
 def clamp_speaking_rate(v: float) -> float:
     return max(0.5, min(3.0, float(v)))
 
 
 def apply_speak_rate_queue_message(settings: "RuntimeSettings", msg: object) -> bool:
-    """If ``msg`` is a rate nudge, update ``settings.speaking_rate`` and return True."""
-    if msg == SPEAK_RATE_UP:
-        settings.speaking_rate = clamp_speaking_rate(settings.speaking_rate + RATE_STEP)
-        save_persisted_speaking_rate(settings.speaking_rate)
-        return True
-    if msg == SPEAK_RATE_DOWN:
-        settings.speaking_rate = clamp_speaking_rate(settings.speaking_rate - RATE_STEP)
-        save_persisted_speaking_rate(settings.speaking_rate)
-        return True
+    """Speaking rate is fixed at 1.0; rate hotkeys are disabled."""
     return False
 
 
@@ -97,6 +94,66 @@ def _drain_coalesce_speak_rates(event_queue: queue.Queue, settings: "RuntimeSett
             apply_speak_rate_queue_message(settings, m)
         else:
             event_queue.put(m)
+
+
+def _settle_speak_rate_changes(
+    event_queue: queue.Queue,
+    settings: "RuntimeSettings",
+    *,
+    settle_ms: float,
+) -> None:
+    """
+    After a rate nudge, wait briefly for more hotkeys (resetting the window on each) so one handoff
+    sees the final target rate instead of chained WSOLA passes.
+    """
+    if settle_ms <= 0:
+        return
+    deadline = time.monotonic() + settle_ms / 1000.0
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            msg = event_queue.get(timeout=min(0.05, remaining))
+        except queue.Empty:
+            return
+        if msg == SHUTDOWN or msg == SPEAK_TOGGLE:
+            event_queue.put(msg)
+            return
+        if apply_speak_rate_queue_message(settings, msg):
+            _drain_coalesce_speak_rates(event_queue, settings)
+            deadline = time.monotonic() + settle_ms / 1000.0
+        else:
+            event_queue.put(msg)
+            return
+
+
+def handoff_tempo_engine_for_ratio(
+    base: str,
+    ratio: float,
+    threshold: float,
+) -> str:
+    """
+    Large in-play speed jumps make WSOLA/phase-vocoder tails sound smeary; use tape-speed resample
+    for those handoffs when the configured engine is pitch-preserving.
+    """
+    b = (base or "wsola").strip().lower()
+    if b not in ("wsola", "phase_vocoder", "resample"):
+        b = "wsola"
+    if threshold <= 1.0:
+        return b
+    r = max(float(ratio), 1.0 / max(float(ratio), 1e-9))
+    if r > threshold and b in ("wsola", "phase_vocoder"):
+        return "resample"
+    return b
+
+
+def adaptive_handoff_extra_sleep_s(tail_bytes: int, bpf: int, framerate: int) -> float:
+    """Extra sleep after ``post_waveout_close_drain_s`` — shorter for tiny tails, capped for long ones."""
+    if bpf <= 0 or framerate <= 0 or tail_bytes <= 0:
+        return 0.06
+    tail_s = (tail_bytes / float(bpf)) / float(framerate)
+    return min(0.10, max(0.025, 0.02 + 0.06 * min(1.0, tail_s / 0.25)))
 
 
 class WAVEFORMATEX(ctypes.Structure):
@@ -354,6 +411,35 @@ def _poll_until_buffer_done_or_cancel(
     return True
 
 
+def _wait_min_handoff_interval(
+    event_queue: queue.Queue,
+    settings: "RuntimeSettings",
+    dev: _WaveOutDevice,
+    *,
+    last_handoff_t: float,
+    min_iv_s: float,
+) -> bool:
+    """Wait until ``min_iv_s`` has passed since ``last_handoff_t`` (polls queue for cancel)."""
+    if min_iv_s <= 0 or last_handoff_t <= 0:
+        return True
+    target = last_handoff_t + min_iv_s
+    while time.monotonic() < target:
+        rem = target - time.monotonic()
+        if rem <= 0:
+            break
+        try:
+            msg = event_queue.get(timeout=min(0.05, rem))
+        except queue.Empty:
+            continue
+        if msg == SHUTDOWN or msg == SPEAK_TOGGLE:
+            dev.reset()
+            return False
+        if not apply_speak_rate_queue_message(settings, msg):
+            continue
+        _drain_coalesce_speak_rates(event_queue, settings)
+    return True
+
+
 def _handoff_pcm_for_new_speaking_rate(
     dev: _WaveOutDevice,
     wfx: WAVEFORMATEX,
@@ -370,15 +456,16 @@ def _handoff_pcm_for_new_speaking_rate(
     rate_effective: float,
     settings: "RuntimeSettings",
     forced_byte_offset: int | None = None,
-) -> tuple[bool, bytes, float]:
+    utterance_text: str | None = None,
+) -> tuple[bool, bytes, float, str | None]:
     """
     ``waveOutReset``, unprepare header, close device, optional drain, tempo-adjust tail, reopen.
 
     Used only when in-play rate changes are enabled (``live_rate_defer_during_playback`` is false). Tail tempo
     uses ``live_rate_in_play_engine`` (default **wsola**: pitch-preserving without tape-speed pitch shift).
-    Returns ``(True, new_pcm_play, new_rate_effective)`` on success. Returns ``(False, …)`` only if
-    ``waveOutOpen`` fails after many retries (caller treats that like a hard stop and skips remaining
-    segments — same as ``SPEAK_TOGGLE``).
+    Returns ``(True, new_pcm_play, new_rate_effective, resynth_remainder_or_none)`` on success. Fourth element
+    set triggers remainder re-synthesis in the worker instead of playing a stretched tail.
+    Returns ``(False, …, None)`` only if ``waveOutOpen`` fails after many retries.
     """
     ratio = settings.speaking_rate / max(rate_effective, 1e-6)
     chunk_boundary = sum(len(chunks[j]) for j in range(chunk_idx))
@@ -418,20 +505,51 @@ def _handoff_pcm_for_new_speaking_rate(
             _drain_s,
             not _safe_chunk,
         )
+
+    raw_tail_preview = pcm_play[offset:]
+    resynth_on = bool(getattr(settings, "live_rate_resynth_remainder", True))
+    min_rem = int(getattr(settings, "live_rate_resynth_min_remainder_chars", 12))
+    if resynth_on and utterance_text and forced_byte_offset is not None:
+        start = min(
+            len(utterance_text),
+            int((offset / max(len(pcm_play), 1)) * len(utterance_text)),
+        )
+        remainder = utterance_text[start:].strip()
+        if len(remainder) >= min_rem:
+            dev.reset()
+            u = waveOutUnprepareHeader(dev.hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR))
+            if u != MMSYSERR_NOERROR:
+                logger.debug("waveOutUnprepareHeader (rate change): %s", u)
+            dev.close()
+            _purge_auxiliary_wave_playback()
+            extra_sleep = adaptive_handoff_extra_sleep_s(len(raw_tail_preview), bpf, framerate)
+            time.sleep(_drain_s)
+            time.sleep(extra_sleep)
+            playback_telemetry_record("live_rate_resynth_remainder")
+            logger.debug(
+                "live rate: resynth remainder (%d chars) at %.2f× — skipping in-play stretch",
+                len(remainder),
+                float(settings.speaking_rate),
+            )
+            return True, b"", float(settings.speaking_rate), remainder
+
     dev.reset()
     u = waveOutUnprepareHeader(dev.hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR))
     if u != MMSYSERR_NOERROR:
         logger.debug("waveOutUnprepareHeader (rate change): %s", u)
     dev.close()
     _purge_auxiliary_wave_playback()
-    time.sleep(_drain_s)
-    time.sleep(0.06)
     raw_tail = pcm_play[offset:]
+    extra_sleep = adaptive_handoff_extra_sleep_s(len(raw_tail), bpf, framerate)
+    time.sleep(_drain_s)
+    time.sleep(extra_sleep)
     if not raw_tail:
         # Nothing left to play at the new rate; finish this WAV without reopening the device.
-        return True, b"", float(settings.speaking_rate)
+        return True, b"", float(settings.speaking_rate), None
 
-    eng = str(getattr(settings, "live_rate_in_play_engine", "wsola")).strip().lower()
+    base_eng = str(getattr(settings, "live_rate_in_play_engine", "wsola")).strip().lower()
+    thr = float(getattr(settings, "live_rate_extreme_ratio_threshold", 1.15))
+    eng = handoff_tempo_engine_for_ratio(base_eng, ratio, thr)
     if audio_debug.is_enabled():
         audio_debug.log_kv(
             "live tempo adjust (in-play)",
@@ -439,6 +557,8 @@ def _handoff_pcm_for_new_speaking_rate(
             ratio=ratio,
             sampwidth=sampwidth,
             engine=eng,
+            base_engine=base_eng,
+            extreme_threshold=thr,
         )
     tail = raw_tail
     try:
@@ -457,6 +577,20 @@ def _handoff_pcm_for_new_speaking_rate(
     if not tail:
         logger.warning("live tempo adjust produced empty tail; using unstretched remainder")
         tail = raw_tail
+    elif sampwidth == 2:
+        tail = _fade_in_first_ms_pcm_s16(
+            tail,
+            channels=channels,
+            sampwidth=sampwidth,
+            framerate=framerate,
+            ms=4.0,
+        )
+
+    prs = float(getattr(settings, "post_reset_silence_ms", 0.0))
+    if prs > 0 and sampwidth == 2:
+        tail = pcm_prepend_silence_s16(
+            tail, channels=channels, sampwidth=sampwidth, framerate=framerate, ms=prs
+        )
 
     new_rate = float(settings.speaking_rate)
     if _wave_out_open_retry(dev, wfx):
@@ -466,13 +600,14 @@ def _handoff_pcm_for_new_speaking_rate(
             new_rate,
             _prev_eff,
         )
-        return True, tail, new_rate
+        playback_telemetry_record("live_rate_handoff")
+        return True, tail, new_rate, None
 
     logger.error(
         "waveOutOpen failed after live-rate handoff (retried). "
         "Try increasing post_waveout_close_drain_s in config or NARRATOR_POST_WAVEOUT_CLOSE_DRAIN_S."
     )
-    return False, pcm_play, rate_effective
+    return False, pcm_play, rate_effective, None
 
 
 def _interleaved_s16_to_mono(pcm: bytes, channels: int) -> bytes:
@@ -522,6 +657,66 @@ def _pcm_s16_mono_to_u8(pcm: bytes) -> bytes:
         s = int.from_bytes(pcm[i : i + 2], "little", signed=True)
         out.append(max(0, min(255, (s // 256) + 128)))
     return bytes(out)
+
+
+def _fade_in_first_ms_pcm_s16(
+    pcm: bytes,
+    *,
+    channels: int,
+    sampwidth: int,
+    framerate: int,
+    ms: float = 3.5,
+) -> bytes:
+    """Gentle linear fade-in on the first few ms to reduce waveOut / segment-start clicks (16-bit PCM)."""
+    import numpy as np
+
+    if sampwidth != 2 or not pcm or channels < 1:
+        return pcm
+    bpf = channels * sampwidth
+    if len(pcm) < bpf * 4:
+        return pcm
+    nframes = len(pcm) // bpf
+    nfade = min(max(2, int(framerate * (ms / 1000.0))), nframes)
+    if nfade < 2:
+        return pcm
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32).copy()
+    ramp = np.linspace(0.0, 1.0, nfade, dtype=np.float32)
+    if channels == 1:
+        x[:nfade] *= ramp
+    else:
+        xf = x.reshape(-1, channels)
+        xf[:nfade, :] *= ramp[:, np.newaxis]
+    return np.clip(np.round(x), -32768, 32767).astype(np.int16).tobytes()
+
+
+def _fade_out_last_ms_pcm_s16(
+    pcm: bytes,
+    *,
+    channels: int,
+    sampwidth: int,
+    framerate: int,
+    ms: float = 3.5,
+) -> bytes:
+    """Linear fade-out on the last few ms to reduce clicks at clip end and before segment boundaries."""
+    import numpy as np
+
+    if sampwidth != 2 or not pcm or channels < 1 or ms <= 0:
+        return pcm
+    bpf = channels * sampwidth
+    if len(pcm) < bpf * 4:
+        return pcm
+    nframes = len(pcm) // bpf
+    nfade = min(max(2, int(framerate * (ms / 1000.0))), nframes)
+    if nfade < 2:
+        return pcm
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32).copy()
+    ramp = np.linspace(1.0, 0.0, nfade, dtype=np.float32)
+    if channels == 1:
+        x[-nfade:] *= ramp
+    else:
+        xf = x.reshape(-1, channels)
+        xf[-nfade:, :] *= ramp[:, np.newaxis]
+    return np.clip(np.round(x), -32768, 32767).astype(np.int16).tobytes()
 
 
 def _pcm_chunks(
@@ -614,19 +809,20 @@ def _wave_out_open_retry(dev: _WaveOutDevice, wfx: WAVEFORMATEX, *, attempts: in
 
 
 def play_wav_interruptible(
-    path: Path,
+    path: Path | bytes,
     event_queue: queue.Queue,
     *,
     settings: "RuntimeSettings",
     rate_baked_in_wav: float,
-) -> bool:
+    utterance_text: str | None = None,
+    crossfade_prev_pcm: bytes | None = None,
+) -> PlayWavResult:
     """
     Play a WAV file in small queued buffers; poll ``event_queue`` between buffers.
     On ``speak_toggle`` / ``shutdown``, call ``waveOutReset`` so audio stops immediately.
 
     Returns:
-        ``True`` if the full clip played to completion; ``False`` if stopped by ``SPEAK_TOGGLE``,
-        ``SHUTDOWN``, chord fallback, or a hard playback error (caller should not continue a multi-segment speak).
+        :class:`PlayWavResult` — see ``played_full_clip``, ``resynth_remainder_text``, ``crossfade_tail_pcm``.
 
     ``rate_baked_in_wav`` is the speaking rate already applied to this file (post-synthesis stretch).
 
@@ -637,48 +833,65 @@ def play_wav_interruptible(
     Only one PCM playback session may run at a time process-wide (:func:`narrator.playback_control.playback_gate_held`).
     """
     with playback_gate_held():
-        return _play_wav_pcm(path, event_queue, settings=settings, rate_baked_in_wav=rate_baked_in_wav)
+        return _play_wav_pcm(
+            path,
+            event_queue,
+            settings=settings,
+            rate_baked_in_wav=rate_baked_in_wav,
+            utterance_text=utterance_text,
+            crossfade_prev_pcm=crossfade_prev_pcm,
+        )
 
 
 def _play_wav_pcm(
-    path: Path,
+    path: Path | bytes,
     event_queue: queue.Queue,
     *,
     settings: "RuntimeSettings",
     rate_baked_in_wav: float,
-) -> bool:
-    audio_debug.log_kv("_play_wav_pcm enter", path=str(path), rate_baked_in_wav=rate_baked_in_wav)
+    utterance_text: str | None = None,
+    crossfade_prev_pcm: bytes | None = None,
+) -> PlayWavResult:
+    audio_debug.log_kv(
+        "_play_wav_pcm enter",
+        path="(bytes)" if isinstance(path, bytes) else str(path),
+        rate_baked_in_wav=rate_baked_in_wav,
+    )
     try:
         try:
-            raw = path.read_bytes()
+            if isinstance(path, bytes):
+                raw = path
+            else:
+                raw = path.read_bytes()
         except OSError as e:
             logger.error("read wav: %s", e)
-            return False
+            return PlayWavResult.cancelled()
 
-        try:
-            path.unlink(missing_ok=True)
-        except OSError as e:
-            logger.debug("unlink wav: %s", e)
+        if not isinstance(path, bytes):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as e:
+                logger.debug("unlink wav: %s", e)
 
         try:
             with wave.open(io.BytesIO(raw), "rb") as w:
                 if w.getcomptype() != "NONE":
                     logger.error("unsupported WAV compression %s", w.getcomptype())
-                    return False
+                    return PlayWavResult.cancelled()
                 channels = w.getnchannels()
                 sampwidth = w.getsampwidth()
                 framerate = w.getframerate()
                 pcm = w.readframes(w.getnframes())
         except Exception as e:
             logger.error("wav parse: %s", e)
-            return False
+            return PlayWavResult.cancelled()
 
         if not pcm:
-            return False
+            return PlayWavResult.cancelled()
 
         if sampwidth not in (1, 2):
             logger.error("unsupported sample width %s bytes", sampwidth)
-            return False
+            return PlayWavResult.cancelled()
 
         # Always play mono: stereo TTS WAVs through waveOut can sound like doubled voices on some setups.
         if channels > 1 and sampwidth == 2:
@@ -688,6 +901,56 @@ def _play_wav_pcm(
             pcm = _interleaved_u8_to_mono(pcm, channels)
             channels = 1
 
+        transition = resolve_playback_transition(settings)
+        xf_ms = transition.segment_crossfade_ms
+        if (
+            xf_ms > 0
+            and crossfade_prev_pcm
+            and sampwidth == 2
+            and len(crossfade_prev_pcm) > 0
+        ):
+            pcm = pcm_apply_crossfade_overlap_s16(
+                pcm,
+                crossfade_prev_pcm,
+                channels=channels,
+                sampwidth=sampwidth,
+                framerate=framerate,
+                ms=xf_ms,
+            )
+
+        if bool(getattr(settings, "speak_voice_clean_enabled", False)) and sampwidth == 2:
+            pcm = pcm_highpass_sosfilt_s16(
+                pcm,
+                channels=channels,
+                sampwidth=sampwidth,
+                framerate=framerate,
+                cutoff_hz=float(getattr(settings, "speak_voice_clean_highpass_hz", 72.0)),
+            )
+
+        if transition.pcm_peak_normalize and sampwidth == 2:
+            pcm = pcm_peak_normalize_s16(
+                pcm,
+                channels=channels,
+                sampwidth=sampwidth,
+                peak=transition.pcm_peak_normalize_level,
+            )
+
+        edge_ms = transition.pcm_edge_fade_ms
+        pcm = _fade_in_first_ms_pcm_s16(
+            pcm,
+            channels=channels,
+            sampwidth=sampwidth,
+            framerate=framerate,
+            ms=edge_ms,
+        )
+        pcm = _fade_out_last_ms_pcm_s16(
+            pcm,
+            channels=channels,
+            sampwidth=sampwidth,
+            framerate=framerate,
+            ms=edge_ms,
+        )
+
         if audio_debug.is_enabled():
             audio_debug.log_kv(
                 "pcm ready",
@@ -695,7 +958,38 @@ def _play_wav_pcm(
                 channels=channels,
                 sampwidth=sampwidth,
                 framerate=framerate,
+                segment_transition_preset=str(
+                    getattr(settings, "segment_transition_preset", "engine")
+                ),
+                speak_engine=str(getattr(settings, "speak_engine", "winrt")),
+                effective_edge_fade_ms=edge_ms,
+                effective_crossfade_ms=xf_ms,
+                effective_peak_normalize=transition.pcm_peak_normalize,
+                speak_voice_clean_enabled=bool(
+                    getattr(settings, "speak_voice_clean_enabled", False)
+                ),
             )
+
+        backend = str(getattr(settings, "audio_output_backend", "waveout")).strip().lower()
+        if backend == "sounddevice":
+            try:
+                from narrator.audio_sounddevice_play import play_prepared_pcm_sounddevice
+
+                return play_prepared_pcm_sounddevice(
+                    pcm,
+                    channels,
+                    sampwidth,
+                    framerate,
+                    event_queue,
+                    settings,
+                    rate_baked_in_wav,
+                    utterance_text=utterance_text,
+                )
+            except ImportError:
+                logger.warning(
+                    "audio_output_backend=sounddevice requires the sounddevice package; "
+                    "pip install sounddevice — falling back to waveOut"
+                )
 
         wfx = WAVEFORMATEX()
         wfx.wFormatTag = WAVE_FORMAT_PCM
@@ -708,14 +1002,16 @@ def _play_wav_pcm(
 
         dev = _WaveOutDevice()
         if not dev.open(wfx):
-            return False
+            return PlayWavResult.cancelled()
 
         bpf = channels * sampwidth
         rate_effective = float(rate_baked_in_wav)
         pcm_play: bytes = pcm
+        last_handoff_t = 0.0
 
         try:
             while pcm_play:
+                seg_pcm_snapshot = pcm_play
                 _, chunks = _pcm_chunks(
                     pcm_play,
                     channels=channels,
@@ -751,14 +1047,14 @@ def _play_wav_pcm(
                     r = waveOutPrepareHeader(dev.hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR))
                     if r != MMSYSERR_NOERROR:
                         logger.error("waveOutPrepareHeader failed: %s", r)
-                        return False
+                        return PlayWavResult.cancelled()
 
                     hdr_unprepared = False
                     try:
                         r = waveOutWrite(dev.hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR))
                         if r != MMSYSERR_NOERROR:
                             logger.error("waveOutWrite failed: %s", r)
-                            return False
+                            return PlayWavResult.cancelled()
                         if audio_debug.is_enabled():
                             audio_debug.log_kv(
                                 "waveOutWrite",
@@ -776,13 +1072,13 @@ def _play_wav_pcm(
                                 now = _default_speak_chord_down()
                                 if now and not chord_prev:
                                     dev.reset()
-                                    return False
+                                    return PlayWavResult.cancelled()
                                 chord_prev = now
                                 continue
                             chord_prev = _default_speak_chord_down()
                             if msg == SHUTDOWN or msg == SPEAK_TOGGLE:
                                 dev.reset()
-                                return False
+                                return PlayWavResult.cancelled()
                             if not apply_speak_rate_queue_message(settings, msg):
                                 continue
                             _drain_coalesce_speak_rates(event_queue, settings)
@@ -797,32 +1093,61 @@ def _play_wav_pcm(
                             if abs(settings.speaking_rate - rate_effective) < 1e-5:
                                 continue
 
+                            _settle_speak_rate_changes(
+                                event_queue,
+                                settings,
+                                settle_ms=float(getattr(settings, "live_rate_settle_ms", 30.0)),
+                            )
+                            if _live_rate_defer_to_next_utterance(settings):
+                                logger.debug(
+                                    "live rate deferred after settle: target=%.2f×",
+                                    settings.speaking_rate,
+                                )
+                                continue
+                            if abs(settings.speaking_rate - rate_effective) < 1e-5:
+                                continue
+
+                            min_iv = float(getattr(settings, "live_rate_min_handoff_interval_s", 0.0))
+                            if not _wait_min_handoff_interval(
+                                event_queue,
+                                settings,
+                                dev,
+                                last_handoff_t=last_handoff_t,
+                                min_iv_s=min_iv,
+                            ):
+                                return PlayWavResult.cancelled()
                             if not _poll_until_buffer_done_or_cancel(
                                 dev, hdr, event_queue, settings
                             ):
-                                return False
+                                return PlayWavResult.cancelled()
                             chunk_end_exclusive = sum(len(chunks[j]) for j in range(chunk_idx)) + len(
                                 chunk
                             )
-                            ok_handoff, pcm_play, rate_effective = _handoff_pcm_for_new_speaking_rate(
-                                dev,
-                                wfx,
-                                hdr,
-                                pcm_play=pcm_play,
-                                chunks=chunks,
-                                chunk_idx=chunk_idx,
-                                chunk=chunk,
-                                bpf=bpf,
-                                framerate=framerate,
-                                sampwidth=sampwidth,
-                                channels=channels,
-                                rate_effective=rate_effective,
-                                settings=settings,
-                                forced_byte_offset=chunk_end_exclusive,
+                            ok_handoff, pcm_play, rate_effective, resynth_rem = (
+                                _handoff_pcm_for_new_speaking_rate(
+                                    dev,
+                                    wfx,
+                                    hdr,
+                                    pcm_play=pcm_play,
+                                    chunks=chunks,
+                                    chunk_idx=chunk_idx,
+                                    chunk=chunk,
+                                    bpf=bpf,
+                                    framerate=framerate,
+                                    sampwidth=sampwidth,
+                                    channels=channels,
+                                    rate_effective=rate_effective,
+                                    settings=settings,
+                                    forced_byte_offset=chunk_end_exclusive,
+                                    utterance_text=utterance_text,
+                                )
                             )
                             hdr_unprepared = True
                             if not ok_handoff:
-                                return False
+                                return PlayWavResult.cancelled()
+                            if resynth_rem:
+                                return PlayWavResult.resynth(resynth_rem)
+                            last_handoff_t = time.monotonic()
                             need_restart = True
                             break
                     finally:
@@ -836,9 +1161,18 @@ def _play_wav_pcm(
                     chunk_idx += 1
 
                 if not need_restart:
-                    return True
-            # ``pcm_play`` became empty without hitting ``return True`` inside the loop (edge case).
-            return True
+                    xf_tail: bytes | None = None
+                    if transition.segment_crossfade_ms > 0 and sampwidth == 2:
+                        xf_tail = pcm_extract_tail_s16(
+                            seg_pcm_snapshot,
+                            channels=channels,
+                            sampwidth=sampwidth,
+                            framerate=framerate,
+                            ms=transition.segment_crossfade_ms,
+                        )
+                    return PlayWavResult.complete(crossfade_tail_pcm=xf_tail)
+            # ``pcm_play`` became empty without hitting complete inside the loop (edge case).
+            return PlayWavResult.complete()
         finally:
             dev.close()
     finally:

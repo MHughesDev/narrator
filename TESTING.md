@@ -59,13 +59,13 @@ If overlap persists, confirm you are **not** using sample-accurate seek (`NARRAT
 From repo root with venv activated:
 
 ```powershell
-pip install -e .
+pip install -e ".[dev]"
 python scripts\smoke_test.py
 python scripts\verify_integration.py
-python -m unittest tests.test_wav_play_win32 -v
+pytest tests/ -v
 ```
 
-CI runs **`smoke_test.py`** (WinRT TTS), **`verify_integration.py`** (protocol, defaults, dual-queue `build_listener`), and **`tests.test_wav_play_win32`** on **windows-latest** (Python 3.11–3.13); see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs **`smoke_test.py`** (WinRT TTS), **`verify_integration.py`** (protocol, defaults, dual-queue `build_listener`), and **`pytest tests/`** (full suite under **`tests/`**) on **windows-latest** (Python 3.11–3.13); see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Tray (optional)
 

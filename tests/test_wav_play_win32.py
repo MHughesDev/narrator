@@ -4,12 +4,36 @@ from __future__ import annotations
 
 import unittest
 
-from narrator.wav_play_win32 import compute_live_rate_resume_offset
+from narrator.wav_play_win32 import (
+    adaptive_handoff_extra_sleep_s,
+    compute_live_rate_resume_offset,
+    handoff_tempo_engine_for_ratio,
+)
 from narrator.wav_speaking_rate import (
     apply_live_in_play_tempo,
     tempo_change_resample_int16_interleaved,
     tempo_change_wsola_int16_interleaved,
 )
+
+
+class TestHandoffHelpers(unittest.TestCase):
+    def test_extreme_ratio_switches_to_resample(self) -> None:
+        self.assertEqual(handoff_tempo_engine_for_ratio("wsola", 1.3, 1.15), "resample")
+        self.assertEqual(handoff_tempo_engine_for_ratio("phase_vocoder", 0.7, 1.15), "resample")
+
+    def test_moderate_ratio_keeps_base(self) -> None:
+        self.assertEqual(handoff_tempo_engine_for_ratio("wsola", 1.08, 1.15), "wsola")
+
+    def test_resample_stays_resample(self) -> None:
+        self.assertEqual(handoff_tempo_engine_for_ratio("resample", 2.0, 1.15), "resample")
+
+    def test_threshold_le_one_disables_switch(self) -> None:
+        self.assertEqual(handoff_tempo_engine_for_ratio("wsola", 2.0, 1.0), "wsola")
+
+    def test_adaptive_extra_in_range(self) -> None:
+        e = adaptive_handoff_extra_sleep_s(8000, 2, 22050)
+        self.assertGreaterEqual(e, 0.025)
+        self.assertLessEqual(e, 0.10)
 
 
 class TestComputeLiveRateResumeOffset(unittest.TestCase):

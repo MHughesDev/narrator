@@ -106,7 +106,6 @@ def main() -> None:
         metavar="NAME",
         help=f"WinRT: name from --list-voices. XTTS: Coqui speaker. Piper: voice id (e.g. {DEFAULT_PIPER_VOICE_ID}).",
     )
-    parser.add_argument("--rate", type=float, default=None, help="Speaking rate (approx 0.5–3.0, default 1.0)")
     parser.add_argument("--volume", type=float, default=None, help="Audio volume 0.0–1.0 (default 1.0)")
     parser.add_argument(
         "--speak-hotkey",
@@ -278,7 +277,7 @@ def main() -> None:
         "--xtts-model",
         default=None,
         metavar="NAME",
-        help="XTTS model id when using --speak-engine=xtts (default: tts_models/multilingual/multi-dataset/xtts_v2).",
+        help="XTTS model id when using --speak-engine=xtts (default: tts_models/multilingual/multi-dataset/xtts_v1.1).",
     )
     parser.add_argument(
         "--xtts-speaker",
@@ -417,7 +416,7 @@ def main() -> None:
     settings = build_runtime_settings(
         config_explicit=args.config,
         voice=args.voice,
-        rate=args.rate,
+        rate=None,
         volume=args.volume,
         speak_hotkey=args.speak_hotkey,
         listen_hotkey=args.listen_hotkey,

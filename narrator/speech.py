@@ -1,4 +1,4 @@
-"""WinRT offline speech synthesis + interruptible WAV playback (winsound)."""
+"""WinRT offline speech synthesis + interruptible WAV playback (Win32 ``waveOut``; ``winsound`` for legacy purge)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import queue
 import threading
 import winsound
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple, Union
 from xml.sax.saxutils import escape
 
 from winrt.windows.media.speechsynthesis import SpeechSynthesizer
@@ -17,9 +17,13 @@ from winrt.windows.storage.streams import DataReader, InputStreamOptions
 from narrator.protocol import SHUTDOWN, SPEAK_RATE_DOWN, SPEAK_RATE_UP, SPEAK_TOGGLE
 
 if TYPE_CHECKING:
+    from narrator.playback_result import PlayWavResult
     from narrator.settings import RuntimeSettings
 
 logger = logging.getLogger(__name__)
+
+# After chunk-context trim, ramp the first ~12 ms to avoid a hard edge at the cut.
+_CHUNK_CONTEXT_POST_TRIM_FADE_MS = 12.0
 
 
 def _clamp_volume(v: float) -> float:
@@ -413,7 +417,19 @@ def _synthesize_xtts_with_queue_cancel(
     synth_thread.join(timeout=600.0)
 
     if result.get("exc"):
-        logger.error("Synthesis failed: %s", result["exc"])
+        err = result["exc"]
+        logger.error("Synthesis failed: %s", err)
+        es = str(err)
+        if "400 tokens" in es or "maximum of 400" in es:
+            logger.error(
+                "XTTS allows ~400 tokens per segment; ensure narrator is up to date (speak chunk cap for XTTS)."
+            )
+        if "CUDA" in es or "device-side assert" in es:
+            logger.error(
+                "XTTS GPU synthesis failed (often oversized or PDF-artifact text). Try "
+                "`xtts_device = \"cpu\"` or set `NARRATOR_XTTS_DEVICE=cpu`; long PDFs should use "
+                "the default XTTS segment cap (Coqui en ~250 char tokenizer limit)."
+            )
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -434,11 +450,124 @@ def _synthesize_xtts_with_queue_cancel(
     return True, shutdown_requested
 
 
+def apply_chunk_context_trim(
+    path: Path,
+    context_prefix: str | None,
+    settings: "RuntimeSettings",
+) -> None:
+    """
+    After synthesizing ``context_prefix + utterance`` into ``path``, remove the audio that corresponds
+    to ``context_prefix`` so playback is only the new chunk. Uses ``fixed_ms`` trim or a **duration_probe**
+    pass (synthesize context-only WAV and drop that many frames) per ``speak_chunk_context_trim_mode``.
+    """
+    import tempfile
+
+    from narrator import audio_pcm
+
+    if not context_prefix or not str(context_prefix).strip():
+        return
+    if not getattr(settings, "speak_chunk_context_enabled", False):
+        return
+    cp = context_prefix.strip()
+    mode = str(getattr(settings, "speak_chunk_context_trim_mode", "fixed_ms")).strip().lower()
+    if mode == "fixed_ms":
+        if audio_pcm.wav_trim_head_ms(path, float(getattr(settings, "speak_chunk_context_trim_ms", 400.0))):
+            audio_pcm.wav_fade_in_head_ms(path, _CHUNK_CONTEXT_POST_TRIM_FADE_MS)
+        return
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp.close()
+    probe = Path(tmp.name)
+    try:
+        if not synthesize_to_path_prefetch(cp, probe, settings, context_prefix=None):
+            logger.warning("Chunk context probe synthesis failed; skipping trim")
+            return
+        n_probe = audio_pcm.wav_frame_count(probe)
+        n_main = audio_pcm.wav_frame_count(path)
+        if n_probe <= 0 or n_probe >= n_main:
+            logger.warning(
+                "Chunk context trim skipped: probe_frames=%s main_frames=%s",
+                n_probe,
+                n_main,
+            )
+            return
+        if not audio_pcm.wav_trim_head_frames(path, n_probe):
+            logger.warning("Chunk context trim: failed to strip overlap from WAV")
+        else:
+            audio_pcm.wav_fade_in_head_ms(path, _CHUNK_CONTEXT_POST_TRIM_FADE_MS)
+    finally:
+        probe.unlink(missing_ok=True)
+
+
+def synthesize_to_path_prefetch(
+    text: str,
+    path: Path,
+    settings: "RuntimeSettings",
+    *,
+    context_prefix: str | None = None,
+) -> bool:
+    """
+    Blocking synthesis + speaking-rate post-process (same as a successful
+    ``synthesize_with_queue_cancel``), without polling ``event_queue``.
+
+    Used to generate the *next* WAV while the current segment plays so playback can stay continuous.
+    """
+    try:
+        if settings.speak_engine == "piper":
+            from narrator.tts_piper import synthesize_piper_to_path
+
+            synthesize_piper_to_path(path, text, settings)
+        elif settings.speak_engine == "xtts":
+            from narrator.tts_xtts import synthesize_xtts_to_path
+
+            synthesize_xtts_to_path(path, text, settings)
+        else:
+
+            async def _winrt_main() -> None:
+                data = await _synthesize_to_bytes(text, settings=settings)
+                path.write_bytes(data)
+
+            asyncio.run(_winrt_main())
+    except ImportError as e:
+        logger.error("Synthesis failed: %s", e)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    except Exception as e:
+        logger.error("Synthesis failed: %s", e)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+
+    try:
+        if settings.speak_engine != "piper":
+            _apply_pitch_preserving_speaking_rate(path, settings)
+    except Exception as e:
+        logger.error("Speaking-rate post-process failed: %s", e)
+        return False
+
+    try:
+        apply_chunk_context_trim(path, context_prefix, settings)
+    except Exception as e:
+        logger.warning("Chunk context trim failed: %s", e)
+
+    return True
+
+
 def synthesize_with_queue_cancel(
     text: str,
     path: Path,
     settings: "RuntimeSettings",
     event_queue: queue.Queue,
+    *,
+    context_prefix: str | None = None,
 ) -> Tuple[bool, bool]:
     """
     Synthesize in a background thread; caller (worker) polls the same ``event_queue`` for
@@ -460,8 +589,9 @@ def synthesize_with_queue_cancel(
             # (phase vocoder) so rate changes do not add persistent chorus on later utterances.
             if settings.speak_engine != "piper":
                 _apply_pitch_preserving_speaking_rate(path, settings)
+            apply_chunk_context_trim(path, context_prefix, settings)
         except Exception as e:
-            logger.error("Speaking-rate post-process failed: %s", e)
+            logger.error("Speaking-rate post-process or chunk trim failed: %s", e)
 
     return ok, shutdown_requested
 
@@ -475,18 +605,33 @@ def stop_playback() -> None:
 
 
 def play_wav_interruptible(
-    path: Path,
+    path: Union[Path, bytes],
     event_queue: queue.Queue,
     *,
     settings: "RuntimeSettings",
     rate_baked_in_wav: float,
-) -> bool:
-    """PCM via winmm ``waveOut`` — ``waveOutReset`` stops audio reliably (``winsound`` purge does not)."""
+    utterance_text: str | None = None,
+    crossfade_prev_pcm: bytes | None = None,
+) -> "PlayWavResult":
+    """PCM via winmm ``waveOut`` (or optional PortAudio); ``waveOutReset`` stops audio reliably."""
     from narrator import audio_debug
     from narrator.wav_play_win32 import play_wav_interruptible as _play
 
-    audio_debug.log_kv("speech.play_wav_interruptible enter", path=str(path))
+    audio_debug.log_kv(
+        "speech.play_wav_interruptible enter",
+        path="(bytes)" if isinstance(path, bytes) else str(path),
+    )
     try:
-        return _play(path, event_queue, settings=settings, rate_baked_in_wav=rate_baked_in_wav)
+        return _play(
+            path,
+            event_queue,
+            settings=settings,
+            rate_baked_in_wav=rate_baked_in_wav,
+            utterance_text=utterance_text,
+            crossfade_prev_pcm=crossfade_prev_pcm,
+        )
     finally:
-        audio_debug.log_kv("speech.play_wav_interruptible leave", path=str(path))
+        audio_debug.log_kv(
+            "speech.play_wav_interruptible leave",
+            path="(bytes)" if isinstance(path, bytes) else str(path),
+        )

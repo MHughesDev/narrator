@@ -24,7 +24,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Base install only (no Coqui XTTS); README/setup.bat use .[speak-xtts] for neural TTS.
-          pip install -e .
+          pip install -e ".[dev]"
 
       - name: Smoke test (WinRT synthesis)
         run: python scripts/smoke_test.py
@@ -32,5 +32,5 @@ jobs:
       - name: Integration check (protocol, defaults, hotkey builder)
         run: python scripts/verify_integration.py
 
-      - name: Unit tests (live-rate resume offset)
-        run: python -m unittest tests.test_wav_play_win32 -v
+      - name: Tests (pytest)
+        run: pytest tests/ -v

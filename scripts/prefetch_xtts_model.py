@@ -5,9 +5,18 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
 def main() -> int:
+    from prefetch_utils import DEFAULT_XTTS_MODEL_ID, env_force_prefetch, xtts_cache_likely_ready
+    from setup_terminal import setup_verbose
+
+    vq = setup_verbose()
     parser = argparse.ArgumentParser(description="Prefetch Coqui XTTS weights into the local cache.")
     parser.add_argument(
         "--yes",
@@ -20,9 +29,24 @@ def main() -> int:
         default="auto",
         help="Torch device for the load (default: auto).",
     )
+    parser.add_argument(
+        "--prefetch-always",
+        action="store_true",
+        help="Load model even if cache looks populated (also: env NARRATOR_FORCE_PREFETCH=1).",
+    )
     args = parser.parse_args()
     if args.yes:
         os.environ.setdefault("COQUI_TOS_AGREED", "1")
+
+    force = args.prefetch_always or env_force_prefetch()
+    if not force and xtts_cache_likely_ready(DEFAULT_XTTS_MODEL_ID):
+        if vq:
+            print(
+                f"SKIP: XTTS cache appears ready for model {DEFAULT_XTTS_MODEL_ID!r} "
+                "(Hugging Face / local TTS cache).",
+                flush=True,
+            )
+        return 0
 
     try:
         from narrator.settings import build_runtime_settings
@@ -63,9 +87,15 @@ def main() -> int:
         print("ERROR: speak_engine did not resolve to xtts.", file=sys.stderr)
         return 3
 
-    print("Loading XTTS model (downloads checkpoints on first run; GPU optional)...", flush=True)
+    if vq:
+        print("Loading XTTS model (downloads checkpoints on first run; GPU optional)...", flush=True)
+    else:
+        print("Prefetch XTTS…", flush=True)
     get_tts(settings)
-    print("OK: XTTS model is cached. First speak with the app should skip this download.", flush=True)
+    if vq:
+        print("OK: XTTS model is cached. First speak with the app should skip this download.", flush=True)
+    else:
+        print("XTTS ready.", flush=True)
     return 0
 
 

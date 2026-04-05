@@ -11,7 +11,7 @@ import queue
 import re
 import sys
 
-from narrator.protocol import LISTEN_TOGGLE, SPEAK_RATE_DOWN, SPEAK_RATE_UP, SPEAK_TOGGLE
+from narrator.protocol import LISTEN_TOGGLE, SPEAK_TOGGLE
 
 
 def parse_hotkey_spec(spec: str) -> str:
@@ -87,17 +87,9 @@ def build_listener(
     def _on_listen() -> None:
         listen_queue.put(LISTEN_TOGGLE)
 
-    def _on_rate_up() -> None:
-        speak_queue.put(SPEAK_RATE_UP)
-
-    def _on_rate_down() -> None:
-        speak_queue.put(SPEAK_RATE_DOWN)
-
     return keyboard.GlobalHotKeys(
         {
             speak_chord: _on_speak,
             listen_chord: _on_listen,
-            "<ctrl>+<alt>+=": _on_rate_up,
-            "<ctrl>+<alt>+-": _on_rate_down,
         }
     )

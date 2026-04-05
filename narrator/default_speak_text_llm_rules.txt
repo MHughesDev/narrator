@@ -1,0 +1,60 @@
+# ANCHOR: narrator_speak_llm_builtin_v1 (used in tests; do not remove)
+
+Editorial rules for speech-ready text. Apply after any upstream heuristic cleanup.
+The system message also includes a **CONSTRAINTS** block (segment caps, bundle shape, speak_engine, mode) — follow it together with this file.
+
+0) Exclude entirely (empty CHUNK body)
+- When an excerpt is not meant to be read aloud as narrative, **omit it completely**: output **nothing** inside that `<<<CHUNK n>>>` wrapper (empty string or whitespace only is fine). **Do not** summarize it, **do not** say “the authors include…”, **do not** list names or citations verbally — silence is correct for that block.
+- **Whole chunk should be empty** if the excerpt is mainly: **table of contents** or contents pages (section titles with page numbers, dot leaders, “Chapter … 12” grids); **bibliography / references / numbered citation lists**; **blocks that are mostly citations** (dense “(Author, Year)” chains, journal volume pages, DOI strings); **long name enumerations** without fluent prose (author lists, program committees, affiliations-only blocks — unless upstream already left the exact phrase `see names`, which you must keep per rule 2); **mathematics and equations** (LaTeX-style, display formulas, expression-heavy lines with no normal sentences); **figure/table caption dumps** or **table grids** taken alone (see also rule 4); keyword / publisher / duplicate-abstract boilerplate (see rule 3).
+- If an excerpt **mixes** a little narrative with bulky filler at the end (e.g. sentence then a citation pile, or prose then an equation line), **keep only the fluent narrative sentences** and **delete** the filler tail entirely — do not paraphrase the math or read the reference list.
+
+1) Output
+- Plain speech-ready prose only. No markdown/code fences, no bullet labels unless they were essential in the source.
+- Do not add a preamble (“Here is…”), quotes around the chunk, or commentary.
+- Preserve paragraph breaks as a single blank line between paragraphs when the excerpt has them.
+- Do not merge multiple CHUNK wrappers; do not invent bridging sentences across wrappers.
+
+2) Preserve upstream heuristics (do not undo)
+- If the text contains the literal phrase “see names”, keep it exactly; do not expand into author names.
+- Keep spaced letter spellings for acronyms already present (e.g. “L L M”, “L L M's”, “A P I”). Do not collapse them back to “LLM”, “LLMs”, “API”, etc.
+- Do not re-insert parenthetical reference lists, figure legend lines, or emails/URLs that are already gone unless the user chunk still contains them for removal.
+
+3) Non-body / boilerplate
+- If an excerpt is clearly not narrative body (keyword lists, publisher/imprint blocks, duplicate abstract, bare ethics boilerplate, “keywords:” lines), output empty for that wrapper (whitespace-only is fine).
+- Use neighboring CHUNKs in bundle mode only to decide whether an excerpt is TOC/contents/front-matter; do not copy text from another CHUNK into this one.
+
+4) Tables and structured dumps (strict)
+- If an excerpt is mostly table rows, column-alignment spacing, numeric grids, or CSV-like list dumps without fluent sentences, output empty for that wrapper.
+- Do not summarize tables, narrate cells, or infer numbers that are not clearly readable as normal prose in the excerpt.
+
+5) Citations and reference noise
+- If the excerpt is **overwhelmingly** citations, bibliography, or reference-list lines, treat rule 0: output **empty** for that wrapper — do not turn it into a shorter citation summary.
+- Otherwise remove remaining citation artifacts inline: “ibid.”, “op. cit.”, “(see … p. …)”, bare “et al.” fragments, superscript footnote markers if visible, Latin legal/citation tags that are not part of the argument.
+- Do not replace removed cites with new sources or years. Do not change factual claims in what remains.
+
+6) Figures and tables in running text
+- Short in-text references (“Figure 3”, “Table 2”) may be shortened to neutral phrases like “in the figure” / “in the table” when the number is not important for listening; if in doubt, keep a minimal cue (“in the figure”).
+
+7) Symbols and numbers (words, no new quantities)
+- When special characters appear, prefer spoken forms only for what is present: e.g. “±” → “plus or minus”, “~” → “about”, “%” → “percent”, “°C” → “degrees Celsius”, simple “$ … ” as “dollars”, scientific notation like 3.5×10^6 → “three point five times ten to the sixth” if unambiguous.
+- Never introduce digits or units that were not in the excerpt.
+
+8) Pacing and light edit
+- Prefer commas or splitting run-ons over heavy rewriting. No synonym stuffing. Do not change the author’s meaning.
+
+9) Unknown abbreviations
+- For obvious all-caps acronyms not already spaced, expand to spaced capitals (“M C P”) or a one-time spelled-out form only if the meaning is explicit in the same excerpt; otherwise spaced capitals only.
+- Plural acronyms (e.g. “LLMs”, “APIs”): use spaced letters plus apostrophe-s for TTS (“L L M's”, “A P I's”), never a trailing “s” glued to the last letter (“L L Ms”).
+
+10) Names and foreign words
+- Optional light respelling for TTS (hyphens or ASCII approximations) when needed. Never substitute different people or place names.
+
+11) Repetition
+- If an excerpt is nearly identical to the previous excerpt in the same bundle (PDF extraction duplicate), output empty for the duplicate.
+
+12) speak_text_llm_mode = llm_primary
+- When upstream heuristics are minimal, you must still strip math, URLs, path-like tokens, obvious markup, heavy citation blocks; long author lists → “see names”; affiliation lines (university, institute, {ids}@…) → “see names”; drop everything before a clear **Abstract** heading when you see paper front matter.
+- Apply rule 0 aggressively: TOC pages, reference sections, equation blocks, and name dumps should yield **empty** chunks — not spoken abbreviations of them.
+
+13) Bundles of four (or more) chunks
+- In bundle mode, it is normal for **one or more** CHUNK positions to be intentionally **empty** after classification (e.g. chunk 2 = TOC, chunk 3 = references). Keep the same wrapper count and order; **do not** borrow text from another CHUNK to “fill in” an empty slot.

@@ -9,7 +9,7 @@
 
 Chords are configurable (`speak_hotkey` / `listen_hotkey` in TOML or `--speak-hotkey` / `--listen-hotkey`). Defaults use **Alt** so **Ctrl+S** (Save) and **Ctrl+L** (e.g. browser address bar) stay free in many apps — remap if a chord still conflicts.
 
-**New machine — full stack:** run **[`setup.bat`](setup.bat)** once. It creates **`.venv`**, scans hardware (**`scripts/hw_detect.py`** — NVIDIA via `nvidia-smi` when present), runs **`scripts/bootstrap_install.py --auto`** to install **WinRT / UIA / hotkey** deps plus **neural TTS** (CPU or **CUDA PyTorch** when a GPU is detected), then **`verify_setup.py`**, **`prefetch_xtts_model.py`**, and **`prefetch_piper_voice.py`**. Profiles and overrides: **[`docs/SETUP.md`](docs/SETUP.md)** · repo map: **[`docs/REPO_LAYOUT.md`](docs/REPO_LAYOUT.md)**.
+**New machine — full stack:** **[`setup.bat`](setup.bat)** once, then **[`run.bat`](run.bat)** every time. Setup checks **Python 3.11–3.14**, creates **`.venv`**, scans hardware (**`scripts/hw_detect.py`** — CPU, RAM, disk, NVIDIA via `nvidia-smi` when present, ARM64 / VC++ hints), runs **`scripts/bootstrap_install.py --auto`** to install **WinRT / UIA / hotkey** deps plus **neural TTS** (CPU or **CUDA PyTorch** when a GPU is detected), then **`verify_setup.py`**, **`prefetch_xtts_model.py`**, **`prefetch_piper_voice.py`**, and **Ollama + text model** for Piper/XTTS (prefetch steps **skip** when caches are warm — see **[`docs/SETUP.md`](docs/SETUP.md)**). **`run.bat`** runs **`ensure_cuda_torch.py`**, ensures **Ollama** is listening if the CLI is installed, then starts the app. Profiles: **[`docs/SETUP.md`](docs/SETUP.md)** · repo map: **[`docs/REPO_LAYOUT.md`](docs/REPO_LAYOUT.md)** · **TTS pipeline**: **[`docs/TTS_PLAYBACK_ROADMAP.md`](docs/TTS_PLAYBACK_ROADMAP.md)**.
 
 **Speak and listen are independent:** they use separate workers and queues. Starting or stopping one **does not** start, stop, or cancel the other. You can use **both at the same time** (for example, dictation active while something is read aloud). Details: [`SPEC.md`](SPEC.md) §5, [`ARCHITECTURE.md`](ARCHITECTURE.md) §5.
 
@@ -40,7 +40,7 @@ That **one step**:
 1. Creates **`.venv`** (if needed), ensures **pip** (`ensurepip`), upgrades **pip / setuptools / wheel**.
 2. Runs **`python scripts\bootstrap_install.py --auto`** — picks **neural-gpu** (CUDA **PyTorch** upgrade after neural extras) if **NVIDIA** is detected, else **neural-cpu**. Override with **`set NARRATOR_SETUP_PROFILE=minimal`** (WinRT-only) or **`neural-cpu`** / **`neural-gpu`** — see **[`docs/SETUP.md`](docs/SETUP.md)**.
 3. Runs **[`scripts/verify_setup.py`](scripts/verify_setup.py)** to confirm imports (prints **torch.cuda** and **onnxruntime** providers).
-4. Runs **[`scripts/prefetch_xtts_model.py`](scripts/prefetch_xtts_model.py)** and **`scripts/prefetch_piper_voice.py`** to cache default **XTTS** and **Piper** voices. Prefetch can take **several minutes**; if it fails, the app still runs and may fetch on first use.
+4. Runs **[`scripts/prefetch_xtts_model.py`](scripts/prefetch_xtts_model.py)** and **`scripts/prefetch_piper_voice.py`** to cache default **XTTS** and **Piper** voices, then **[`scripts/setup_ollama_speak_llm.py`](scripts/setup_ollama_speak_llm.py)** for **Ollama** + the default text model (neural profiles). Prefetch can take **several minutes**; if it fails, the app still runs and may fetch on first use.
 
 Default **`speak_engine`** is **`auto`**: **XTTS** when Coqui is installed (as after `setup.bat`), else **Piper** when an ONNX voice is present, else **Windows WinRT** TTS. Copy **[`config.example.toml`](config.example.toml)** to `%USERPROFILE%\.config\narrator\config.toml` if you want the same defaults in writing.
 
@@ -49,10 +49,10 @@ You only need full setup **once** per machine (or again after pulling major depe
 **4. Run Narrator**
 
 ```bat
-run_narrator.bat
+run.bat
 ```
 
-Or, with the venv active:
+Same as **`run_narrator.bat`**. Or, with the venv active:
 
 ```powershell
 python -m narrator
@@ -88,11 +88,13 @@ Use **`pip install -e .`** instead if you only want **WinRT** TTS (smaller insta
 
 | File | Purpose |
 |------|---------|
-| **[`setup.bat`](setup.bat)** | **Full install:** `.venv`, **`scripts/bootstrap_install.py --auto`** (hardware-aware), **`verify_setup.py`**, prefetch scripts. |
-| **[`scripts/bootstrap_install.py`](scripts/bootstrap_install.py)** | **`--auto`** or **`--profile`** `minimal` / `neural-cpu` / `neural-gpu`; optional **`--dry-run`**, **`--skip-prefetch`**. |
-| **[`scripts/hw_detect.py`](scripts/hw_detect.py)** | Print platform / NVIDIA detection (used by bootstrap). |
-| **[`run_narrator.bat`](run_narrator.bat)** | Run `python -m narrator` using `.venv` if present. |
-| **[`run_narrator_tray.bat`](run_narrator_tray.bat)** | Run with `--tray` via `pythonw` (install `[tray]` first). |
+| **[`setup.bat`](setup.bat)** | **Full install:** `.venv`, **`scripts/bootstrap_install.py --auto`** (hardware-aware), **`verify_setup.py`**, prefetch, **Ollama + text model**, then **`scripts/ensure_cuda_torch.py`** if needed. |
+| **[`run.bat`](run.bat)** | **`scripts/ensure_ollama_running.bat`** (if `ollama` on PATH), **`scripts/ensure_cuda_torch.py`**, then **`python -m narrator`** (`.venv` if present). Primary launcher after setup. |
+| **[`scripts/bootstrap_install.py`](scripts/bootstrap_install.py)** | **`--auto`** or **`--profile`** `minimal` / `neural-cpu` / `neural-gpu`; optional **`--dry-run`**, **`--skip-prefetch`**, **`--prefetch-always`** (or env **`NARRATOR_FORCE_PREFETCH`**). Only **`pip install`** — never uninstalls deps. |
+| **[`scripts/hw_detect.py`](scripts/hw_detect.py)** | Platform, CPU, RAM, disk, NVIDIA (`nvidia-smi`), ARM64 / VC++ hints (used by bootstrap). |
+| **[`scripts/prefetch_utils.py`](scripts/prefetch_utils.py)** | Cache checks for idempotent XTTS / Piper prefetch (used by prefetch scripts). |
+| **[`run_narrator.bat`](run_narrator.bat)** | Same as **`run.bat`** (ensure Ollama / CUDA, then **`python -m narrator`**). |
+| **[`run_narrator_tray.bat`](run_narrator_tray.bat)** | **`ensure_ollama_running.bat`**, **`ensure_cuda_torch.py`**, then **`pythonw -m narrator --tray`** (install `[tray]` first). |
 | **[`scripts/verify_setup.py`](scripts/verify_setup.py)** | Check **WinRT / UIA / PyTorch / Coqui** imports after install. |
 | **[`scripts/prefetch_xtts_model.py`](scripts/prefetch_xtts_model.py)** | Load/cache XTTS weights (re-run after GPU/CUDA PyTorch changes if needed). |
 | **[`scripts/prefetch_piper_voice.py`](scripts/prefetch_piper_voice.py)** | Download default Piper ONNX voice (`en_US-ryan-high`) into `%LOCALAPPDATA%\narrator\piper`. |
@@ -138,7 +140,7 @@ narrator
 
 - **Start:** hover the content, press the speak chord.
 - **Stop:** press the same chord again.
-- **While audio is playing:** **Ctrl+Alt+Plus** / **Ctrl+Alt+Minus** (main keyboard or numpad) nudge speaking rate up/down. Playback uses a single `waveOut` stream; see [Troubleshooting](#troubleshooting) if you hear overlapping voices.
+- Speaking tempo is fixed at normal speed (no in-play rate hotkeys for now). Playback uses a single `waveOut` stream; see [Troubleshooting](#troubleshooting) if you hear overlapping voices.
 
 ### Listen (STT) — default **Ctrl+Alt+L**
 
@@ -170,7 +172,6 @@ Or **`run_narrator_tray.bat`**. Right‑click the tray icon → **Quit**.
 | `--voice NAME` | WinRT: voice from `--list-voices`. XTTS: speaker from `--list-xtts-speakers`. Piper: voice id (e.g. `en_US-ryan-high`) |
 | `--piper-voice ID` | Default Piper voice when using **`--speak-engine piper`** (see **`prefetch_piper_voice.py`**) |
 | `--xtts-model`, `--xtts-speaker`, `--xtts-language`, `--xtts-device`, `--xtts-speaker-wav` | Neural TTS options when using XTTS |
-| `--rate 1.0` | Speaking rate (~**0.5–3.0**) |
 | `--volume 0.9` | Volume **0.0–1.0** |
 | `--speak-hotkey CHORD` | Speak toggle (default **ctrl+alt+s** or config) |
 | `--listen-hotkey CHORD` | Listen toggle (default **ctrl+alt+l** or config) |
@@ -192,7 +193,7 @@ Or **`run_narrator_tray.bat`**. Right‑click the tray icon → **Quit**.
 | `--tray` | Tray + Quit (needs **`[tray]`** install) |
 
 ```powershell
-python -m narrator --speak-hotkey ctrl+shift+s --rate 1.1 --list-voices
+python -m narrator --speak-hotkey ctrl+shift+s --list-voices
 python -m narrator --list-xtts-speakers
 python -m narrator --speak-engine xtts --voice "Ana Florence"
 ```
@@ -220,7 +221,13 @@ Output: `dist\narrator.exe`. If bundling fails, use `python -m narrator`.
 
 ## CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/smoke_test.py` on **windows-latest** (Python **3.11–3.13**).
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `scripts/smoke_test.py`, `scripts/verify_integration.py`, and **`pytest tests/`** (full suite under [`tests/`](tests/)), on **windows-latest** with Python **3.11–3.13**. Local installs may use **3.14** where supported; neural extras (**Coqui XTTS**) still expect **Python below 3.15** (see [`pyproject.toml`](pyproject.toml) `requires-python` and [`setup.bat`](setup.bat)).
+
+---
+
+## Open source
+
+Licensed under the **MIT License** — see [`LICENSE`](LICENSE). Contributions: [`CONTRIBUTING.md`](CONTRIBUTING.md). **Security:** [`SECURITY.md`](SECURITY.md).
 
 ---
 
@@ -234,7 +241,7 @@ Start from **[`config.example.toml`](config.example.toml)** or use:
 speak_engine = "auto"
 piper_voice = "en_US-ryan-high"
 voice = "Ana Florence"
-xtts_model = "tts_models/multilingual/multi-dataset/xtts_v2"
+xtts_model = "tts_models/multilingual/multi-dataset/xtts_v1.1"
 rate = 1.0
 volume = 1.0
 speak_hotkey = "ctrl+alt+s"
@@ -250,7 +257,7 @@ Legacy `hotkey` maps to `speak_hotkey` — see [`narrator/settings_schema.md`](n
 
 ## Troubleshooting
 
-- **Overlapping / stacked voices during speak** — See **[`docs/DEBUG_MULTIPLE_VOICES.md`](docs/DEBUG_MULTIPLE_VOICES.md)** for hypotheses and run with **`NARRATOR_DEBUG_AUDIO=1`** to log gate / `waveOut` / worker boundaries. Only one **`python -m narrator`** should run. **Echo/chorus after you changed speed once, on every new paragraph?** With **Piper**, tempo is now baked in at synthesis (**`length_scale`**) instead of a separate librosa pass on the whole WAV—so it should stay clean. **WinRT / XTTS** still use librosa when ``speaking_rate ≠ 1`` (same engine limitation as before). **Real-time speed (Ctrl+Alt+Plus/Minus) while speaking** uses **WSOLA** (pitch-preserving; default **`live_rate_in_play_engine = "wsola"`**). Alternatives: **`phase_vocoder`** (librosa; may echo) or **`resample`** (tape-speed pitch shift). Next-utterance-only: **`live_rate_defer_during_playback = true`**. If it sounds **roomy** when not changing rate, try disabling **spatial audio / enhancements** on the output device. A second copy plays on top of the first; the app normally exits if another instance exists (override with **`NARRATOR_ALLOW_MULTI=1`** only if you intend multiple processes). Listen (dictation) and speak use **separate** audio paths by design. **Live rate** defaults to **chunk-boundary resume** (skips the rest of the current ~100ms+ buffer to the next boundary—no `waveOutGetPosition` cut—so already-played audio is not repeated). If you enabled **sample-accurate** seek (`live_rate_safe_chunk_discard = false` or **`NARRATOR_LIVE_RATE_ACCURATE_SEEK=1`**) and hear echo, go back to chunk mode (**`NARRATOR_LIVE_RATE_SAFE=1`** or remove accurate seek) or raise **`NARRATOR_LIVE_RATE_SLACK_MS`** / **`NARRATOR_POST_WAVEOUT_CLOSE_DRAIN_S`**. **`NARRATOR_DEBUG_LIVE_RATE=1`** logs handoffs (or **`--verbose`**).
+- **Overlapping / stacked voices during speak** — See **[`docs/DEBUG_MULTIPLE_VOICES.md`](docs/DEBUG_MULTIPLE_VOICES.md)** for hypotheses and run with **`NARRATOR_DEBUG_AUDIO=1`** to log gate / `waveOut` / worker boundaries. Only one **`python -m narrator`** should run. If it sounds **roomy**, try disabling **spatial audio / enhancements** on the output device. A second copy plays on top of the first; the app normally exits if another instance exists (override with **`NARRATOR_ALLOW_MULTI=1`** only if you intend multiple processes). Listen (dictation) and speak use **separate** audio paths by design. (**Speaking speed hotkeys are disabled for now** — tempo stays at 1.0.)
 - **Nothing on speak** — Another app may use the same chord. Try `--speak-hotkey ctrl+shift+alt+s` or another combo.
 - **Nothing on listen** — Another app may use the same chord. Try `--listen-hotkey ctrl+shift+alt+l` or remap in TOML.
 - **No text (speak)** — Some UIs hide text from UI Automation. Try Notepad or VS Code.
@@ -271,6 +278,7 @@ Legacy `hotkey` maps to `speak_hotkey` — see [`narrator/settings_schema.md`](n
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Stack and modules |
 | [`SPEC.md`](SPEC.md) | Behavior |
 | [`TESTING.md`](TESTING.md) | Manual test matrix |
+| [`SECURITY.md`](SECURITY.md) | How to report security issues |
 | [`.gitignore`](.gitignore) | Ignores `.venv/`, `*.egg-info/`, `dist/`, etc. |
 | [`narrator/settings_schema.md`](narrator/settings_schema.md) | TOML keys and defaults (**Ctrl+Alt+S** / **Ctrl+Alt+L**) |
 

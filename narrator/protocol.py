@@ -8,7 +8,7 @@ Defaults (configurable): **Ctrl+Alt+S** → ``speak_toggle`` (TTS from hover); *
 ``listen_toggle`` — start/stop microphone dictation into the focused field.
 ``shutdown`` — stop workers and release resources.
 ``listen_session_ended`` — internal: dictation thread exited (placed by the listen worker, not the hotkey).
-``speak_rate_up`` / ``speak_rate_down`` — adjust speaking rate during WAV playback only (Ctrl+Alt+Plus / Minus).
+``speak_rate_up`` / ``speak_rate_down`` — reserved; speaking rate is fixed (no hotkey).
 """
 
 from __future__ import annotations

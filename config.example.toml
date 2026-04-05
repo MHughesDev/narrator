@@ -13,21 +13,60 @@ speak_engine = "auto"
 # speak_exclude_technical = true
 # speak_exclude_chrome = true
 # speak_exclude_emoji = true
+# Paper / PDF helpers (see narrator/speak_preprocess.py):
+# speak_expand_tech_abbreviations = true   # LLM, CLI, … → spaced letters for clearer TTS
+# speak_strip_arxiv_metadata = true         # drop arXiv id / arxiv.org header lines
+# speak_strip_toc_leader_lines = true     # drop dot-leader TOC lines
+# speak_strip_contents_pages = true       # drop paragraphs that look like a contents page
+# speak_strip_figure_legend_lines = true  # figure legend / timeline year lines from PDF dumps
+# speak_collapse_long_name_lists = true    # long “Author, Author, …” → “see names” (keeps {ids}@ / university lines)
+# speak_long_name_list_max = 4
+# speak_start_at_abstract = true        # default: skip title / authors / affiliation; start at Abstract (set false for full doc)
 # speak_insert_line_pauses = true
 # speak_pause_between_lines = false
 # speak_winrt_use_ssml_breaks = true
 # speak_pause_line_ms = 320
 # speak_pause_paragraph_ms = 520
 
+# Large documents: preprocess first bundle only, rest in background (faster start). speak_preprocess_initial_chunks ≈ chunk-count worth of raw text.
+# speak_preprocess_streaming = true
+# speak_preprocess_initial_chunks = 3
+
+# Local LLM (OpenAI-compatible: Ollama, LM Studio). Piper/XTTS: always used; default model llama3.2:1b if unset.
+# WinRT: off unless speak_text_llm_enabled = true. setup.bat (neural) runs Ollama install + ollama pull.
+# speak_text_llm_enabled = false          # WinRT only; ignored when speak_engine resolves to piper or xtts
+# speak_text_llm_base_url = "http://127.0.0.1:11434/v1"
+# speak_text_llm_model = "llama3.2:1b"     # optional for Piper/XTTS (default applied when "")
+# speak_text_llm_bundle_chunks = 1         # default 1 (reliable); 2–4 for larger Ollama models + <<<CHUNK>>> discipline
+# speak_text_llm_bundle_max_chars = 16000  # max total chars per bundled request
+# speak_text_llm_mode = "heuristic_then_llm"
+# speak_text_llm_builtin_rules = true        # packaged default_speak_text_llm_rules.txt prepended to RULES
+# speak_text_llm_rules_file = "C:\\Users\\You\\narrator_speak_rules.txt"
+
+# Pipeline: larger prefetch backlog / parallel synth (XTTS: keep worker_threads=1).
+# speak_synth_max_ahead = 32
+# speak_synth_worker_threads = 1
+# speak_keep_wav_in_memory = false
+
+# Multi-chunk speak: prepend tail of previous chunk to the next synthesis (all engines). Default trim is fixed_ms (fast). duration_probe = extra XTTS synth per segment for trim measurement.
+# speak_chunk_context_enabled = true
+# speak_chunk_context_max_chars = 120
+# speak_chunk_context_trim_mode = "fixed_ms"
+# speak_chunk_context_trim_ms = 400
+
 # With auto: XTTS uses voice/xtts_* below; Piper uses piper_voice only if Coqui is unavailable.
 voice = "Ana Florence"
-xtts_model = "tts_models/multilingual/multi-dataset/xtts_v2"
+xtts_model = "tts_models/multilingual/multi-dataset/xtts_v1.1"
 xtts_speaker = "Ana Florence"
 xtts_language = "en"
 xtts_device = "auto"
 # Piper fallback (auto when Coqui missing) or when speak_engine = "piper":
 piper_voice = "en_US-ryan-high"
 # Force Piper even with Coqui: speak_engine = "piper"
+
+# Optional neural-TTS cleanup: high-pass before peak normalize (see docs/TTS_VOICE_CLEANING.md).
+# speak_voice_clean_enabled = false
+# speak_voice_clean_highpass_hz = 72
 
 # Live rate during playback (Ctrl+Alt+Plus/Minus) — optional; env NARRATOR_* overrides these.
 # Default: chunk-boundary resume (no echo). Uncomment for sample-accurate seek (may echo on some PCs):
@@ -38,3 +77,14 @@ piper_voice = "en_US-ryan-high"
 # live_rate_defer_during_playback = true
 # Optional: phase_vocoder | resample
 # live_rate_in_play_engine = "phase_vocoder"
+# pcm_edge_fade_ms = 3.5
+# live_rate_settle_ms = 30
+# live_rate_extreme_ratio_threshold = 1.15
+# live_rate_min_handoff_interval_s = 0
+# live_rate_resynth_remainder = true
+# post_reset_silence_ms = 0
+# pcm_peak_normalize = false
+# segment_crossfade_ms = 0
+# audio_output_backend = "waveout"
+# Segment joins: engine = smooth per TTS route (default); custom = use pcm_edge_fade_ms / segment_crossfade_ms; minimal = light
+# segment_transition_preset = "engine"
