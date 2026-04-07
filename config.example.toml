@@ -35,6 +35,7 @@ speak_engine = "auto"
 # Local LLM (OpenAI-compatible: Ollama, LM Studio). Piper/XTTS: always used; default model llama3.2:1b if unset.
 # WinRT: off unless speak_text_llm_enabled = true. setup.bat (neural) runs Ollama install + ollama pull.
 # speak_text_llm_enabled = false          # WinRT only; ignored when speak_engine resolves to piper or xtts
+# speak_text_llm_force_for_neural = true   # default: force LLM cleanup for Piper/XTTS; set false to reduce latency
 # speak_text_llm_base_url = "http://127.0.0.1:11434/v1"
 # speak_text_llm_model = "llama3.2:1b"     # optional for Piper/XTTS (default applied when "")
 # speak_text_llm_bundle_chunks = 1         # default 1 (reliable); 2–4 for larger Ollama models + <<<CHUNK>>> discipline

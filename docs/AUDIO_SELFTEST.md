@@ -22,14 +22,23 @@ python scripts\audio_loopback_record.py --duration 45 --out-dir audio_selftest_l
 python scripts\analyze_audio_recordings.py audio_selftest_logs
 ```
 
-## Metrics (heuristic)
+## Metrics (heuristic + quality gates)
 
 | Field | Meaning |
 |-------|--------|
-| `autocorr_echo_ratio_40_500ms` | Strength of delayed self-similarity in the envelope — **higher** may indicate **echo / delayed copy**. |
-| `echo_likelihood_0_1` | Normalized score from the above (not a clinical test). |
-| `rms_burst_edges_per_s` | Rough “activity edges” per second — **higher** *may* suggest **overlapping** phrases. |
-| `overlap_likelihood_0_1` | Normalized from burstiness. |
+| `autocorr_echo_ratio_40_500ms`, `echo_likelihood_0_1` | Delayed self-similarity heuristic (**echo/chorus** risk). |
+| `rms_burst_edges_per_s`, `overlap_likelihood_0_1` | Onset burstiness heuristic (**overlap/double voice** risk). |
+| `clip_ratio_near_fullscale`, `clip_likelihood_0_1` | Samples near full-scale (**clipping/distortion** risk). |
+| `longest_silent_run_s`, `silent_runs_over_200ms`, `dropout_likelihood_0_1` | Long silence runs (**skip/dropout** risk). |
+| `spectral_centroid_delta_mean_hz`, `zcr_mean`, `instability_likelihood_0_1` | Spectral jitter/roughness proxy (**robotic/unstable** risk). |
+| `quality_risk_0_1` | Weighted aggregate risk score. |
+
+The analyzer now includes pass/fail quality gates per file and exits non-zero on failures:
+
+- Exit `0`: analyzed files passed configured thresholds
+- Exit `4`: at least one analyzed file failed quality gates
+
+Use `--strict` for tighter thresholds when doing regression hunting.
 
 Interpret together with **`NARRATOR_DEBUG_AUDIO=1`** logs.
 

@@ -43,7 +43,8 @@ Files are merged in order; later files override earlier keys. Standard paths: `%
 | `speak_chunk_context_trim_ms` | float | `400` | Used when `speak_chunk_context_trim_mode` = `fixed_ms`. Env: `NARRATOR_SPEAK_CHUNK_CONTEXT_TRIM_MS`. |
 | `speak_preprocess_streaming` | bool | `true` | Large captures: preprocess only an initial **paragraph-bounded** bundle first; the rest runs in a background thread so the first TTS chunk can start sooner. Env: `NARRATOR_SPEAK_PREPROCESS_STREAMING`. |
 | `speak_preprocess_initial_chunks` | int | `3` | Rough number of TTS-chunk lengths of raw text in the first bundle (with a minimum raw-char floor in code). Env: `NARRATOR_SPEAK_PREPROCESS_INITIAL_CHUNKS`. |
-| `speak_text_llm_enabled` | bool | `false` | **WinRT:** opt-in. **Piper / XTTS:** forced **on** after engine resolution. See [`docs/SPEAK_TEXT_LLM.md`](../docs/SPEAK_TEXT_LLM.md). Env: `NARRATOR_SPEAK_TEXT_LLM_ENABLED` (WinRT only; ignored for Piper/XTTS). |
+| `speak_text_llm_enabled` | bool | `false` | LLM text-ready pass toggle. By default neural engines (Piper/XTTS) force this on; set `speak_text_llm_force_for_neural = false` to allow disabling for speed tests. See [`docs/SPEAK_TEXT_LLM.md`](../docs/SPEAK_TEXT_LLM.md). Env: `NARRATOR_SPEAK_TEXT_LLM_ENABLED`. |
+| `speak_text_llm_force_for_neural` | bool | `true` | Keep default behavior that Piper/XTTS force LLM cleanup on. Set `false` to allow neural engines to run with LLM disabled (lower latency / throughput benchmarking). Env: `NARRATOR_SPEAK_TEXT_LLM_FORCE_NEURAL`. |
 | `speak_text_llm_base_url` | string | `http://127.0.0.1:11434/v1` | API root (Ollama/LM Studio). Env: `NARRATOR_SPEAK_TEXT_LLM_BASE_URL`. |
 | `speak_text_llm_model` | string | `""` | Model id; **Piper/XTTS** default **`llama3.2:1b`** when empty. Env: `NARRATOR_SPEAK_TEXT_LLM_MODEL`. |
 | `speak_text_llm_api_key` | string | — | Optional `Authorization` bearer. Env: `NARRATOR_SPEAK_TEXT_LLM_API_KEY`. |
