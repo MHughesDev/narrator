@@ -100,6 +100,7 @@ Use **`pip install -e .`** instead if you only want **WinRT** TTS (smaller insta
 | **[`scripts/prefetch_piper_voice.py`](scripts/prefetch_piper_voice.py)** | Download default Piper ONNX voice (`en_US-ryan-high`) into `%LOCALAPPDATA%\narrator\piper`. |
 | **[`run_audio_selftest.bat`](run_audio_selftest.bat)** | **Loopback diagnostic:** mic near speaker → records WAV, then runs **[`scripts/analyze_audio_recordings.py`](scripts/analyze_audio_recordings.py)** (echo / overlap heuristics). Install: **`pip install -e ".[audio-test]"`**. Optional **`--openai`** needs **`OPENAI_API_KEY`** and **`pip install openai`**. |
 | **[`scripts/audio_loopback_record.py`](scripts/audio_loopback_record.py)** | Record default microphone only (used by the batch file). |
+| **[`scripts/audio_inference_selftest.py`](scripts/audio_inference_selftest.py)** | **Fixture-based ASR self-test:** optional audio download, Whisper inference, transcript assertions (WER/recall/precision), machine-readable JSON for agent automation. |
 
 ---
 

@@ -42,3 +42,46 @@ set OPENAI_API_KEY=sk-...
 pip install openai
 python scripts\analyze_audio_recordings.py audio_selftest_logs --openai
 ```
+
+---
+
+## Automated fixture inference self-test (agent/CI friendly)
+
+Use this when you want deterministic pass/fail checks from a known audio clip (instead of mic loopback):
+
+1. Optionally download a public fixture WAV
+2. Run Whisper inference on that file
+3. Compare transcript to expected text using token WER/precision/recall thresholds
+
+Install deps:
+
+```powershell
+pip install -e ".[listen-whisper,dev]"
+```
+
+Run with bundled default fixture (spoken digit "zero"):
+
+```powershell
+python scripts\audio_inference_selftest.py --use-default-fixture --print-json
+```
+
+The default fixture URL is:
+
+`https://raw.githubusercontent.com/Jakobovski/free-spoken-digit-dataset/master/recordings/0_jackson_0.wav`
+
+Custom fixture + expected transcript:
+
+```powershell
+python scripts\audio_inference_selftest.py `
+  --audio-url https://example.com/sample.wav `
+  --audio-path audio_selftest_logs\sample.wav `
+  --expected-text "your expected transcript here" `
+  --max-wer 0.40 --min-token-recall 0.60 --min-token-precision 0.60 `
+  --json-out audio_selftest_logs\inference_report.json
+```
+
+Notes:
+
+- Exit code `0` = pass, `4` = inference completed but failed thresholds.
+- Use `--fixture-sha256` to pin fixture integrity.
+- This validates the **ASR path** directly; pair it with loopback diagnostics above for playback-path issues.
