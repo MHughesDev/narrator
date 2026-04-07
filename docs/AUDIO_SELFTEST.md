@@ -94,3 +94,31 @@ Notes:
 - Exit code `0` = pass, `4` = inference completed but failed thresholds.
 - Use `--fixture-sha256` to pin fixture integrity.
 - This validates the **ASR path** directly; pair it with loopback diagnostics above for playback-path issues.
+
+---
+
+## Recommended performance + quality sweep
+
+To compare speed and quality across engine/device profiles in one run:
+
+```powershell
+python scripts\tts_quality_perf_sweep.py --print-json
+```
+
+What it does:
+
+1. Runs a profile matrix (WinRT, Piper CPU/CUDA, XTTS auto/cpu/cuda by default)
+2. Measures synthesis speed (mean synth time, mean audio duration, RTF)
+3. Analyzes generated WAV quality with the same glitch metrics/gates
+4. Ranks only quality-passing profiles by fastest RTF
+
+Outputs:
+
+- Per-profile WAV files under `audio_selftest_logs/tts_perf_sweep/<profile>/`
+- JSON report at `audio_selftest_logs/tts_perf_sweep/sweep_report.json` (or `--json-out`)
+
+Exit codes:
+
+- `0`: at least one profile passed quality gates
+- `4`: profiles ran but none passed quality gates
+- `3`: no profile could run in the current environment

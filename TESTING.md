@@ -78,6 +78,16 @@ python scripts\audio_inference_selftest.py --use-default-fixture --print-json
 
 This script can also run with custom fixture WAVs and expected transcripts (and emits a JSON report for agent assertions). See [`docs/AUDIO_SELFTEST.md`](docs/AUDIO_SELFTEST.md).
 
+## TTS quality + performance sweep (automated)
+
+Use this to run a recommended matrix of profiles and rank the best speed among quality-passing variants:
+
+```powershell
+python scripts\tts_quality_perf_sweep.py --strict --print-json
+```
+
+It benchmarks synthesis throughput (RTF), analyzes the generated WAVs for glitch signals, applies quality gates, and outputs a ranked list in `audio_selftest_logs/tts_perf_sweep/sweep_report.json`.
+
 ## Tray (optional)
 
 After `pip install -e ".[tray]"`, run `python -m narrator --tray`, confirm **Ctrl+Alt+S** / **Ctrl+Alt+L** (or your configured chords), then **Quit** from the tray icon (no zombie `narrator` in Task Manager).
