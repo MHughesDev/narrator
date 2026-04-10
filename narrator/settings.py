@@ -83,6 +83,8 @@ class RuntimeSettings:
     speak_text_llm_bundle_chunks: int = 1
     # Soft cap on total characters per bundled LLM request (sum of per-chunk bodies after max_chunk_chars trim).
     speak_text_llm_bundle_max_chars: int = 16000
+    # Keep neural (Piper/XTTS) default "LLM on" behavior; set False to allow fully disabling LLM for speed.
+    speak_text_llm_force_for_neural: bool = True
     # ``heuristic_then_llm`` = full preprocess then LLM per chunk; ``llm_primary`` = minimal strip then LLM.
     speak_text_llm_mode: str = "heuristic_then_llm"
     speak_text_llm_rules: str = ""
@@ -266,6 +268,7 @@ def build_runtime_settings(
     speak_exclude_technical: Optional[bool] = None,
     speak_exclude_chrome: Optional[bool] = None,
     speak_exclude_emoji: Optional[bool] = None,
+    speak_text_llm_force_for_neural: Optional[bool] = None,
     speak_insert_line_pauses: Optional[bool] = None,
     speak_pause_between_lines: Optional[bool] = None,
     speak_winrt_use_ssml_breaks: Optional[bool] = None,
@@ -459,6 +462,14 @@ def build_runtime_settings(
         default=False,
         env_name="NARRATOR_SPEAK_TEXT_LLM_ENABLED",
     )
+    if speak_text_llm_force_for_neural is None:
+        speak_text_llm_force_for_neural_b = _bool_cfg_env(
+            "speak_text_llm_force_for_neural",
+            default=True,
+            env_name="NARRATOR_SPEAK_TEXT_LLM_FORCE_NEURAL",
+        )
+    else:
+        speak_text_llm_force_for_neural_b = bool(speak_text_llm_force_for_neural)
     st_llm_base = str(cfg.get("speak_text_llm_base_url", "http://127.0.0.1:11434/v1") or "").strip()
     _ev_lb = os.environ.get("NARRATOR_SPEAK_TEXT_LLM_BASE_URL", "").strip()
     if _ev_lb:
@@ -708,8 +719,9 @@ def build_runtime_settings(
 
     se_resolved = _resolve_speak_engine(se_s, piper_onnx=onnx_path)
 
-    # Piper and XTTS always run the local LLM text-readying pass (Ollama-compatible API).
-    if se_resolved in ("piper", "xtts"):
+    # Default behavior keeps neural engines on local LLM cleanup for speech-ready text.
+    # Advanced users can disable this for lower latency via config/env.
+    if se_resolved in ("piper", "xtts") and speak_text_llm_force_for_neural_b:
         speak_text_llm_enabled = True
         if not (st_llm_model or "").strip():
             st_llm_model = DEFAULT_SPEAK_TEXT_LLM_MODEL
@@ -916,6 +928,7 @@ def build_runtime_settings(
         speak_text_llm_max_chunk_chars=st_llm_mcc,
         speak_text_llm_bundle_chunks=st_llm_bun_n,
         speak_text_llm_bundle_max_chars=st_llm_bun_mc,
+        speak_text_llm_force_for_neural=speak_text_llm_force_for_neural_b,
         speak_text_llm_mode=st_llm_mode,
         speak_text_llm_rules=st_llm_rules,
         speak_text_llm_rules_file=st_llm_rules_file,

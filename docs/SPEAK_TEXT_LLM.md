@@ -2,7 +2,8 @@
 
 **OpenAI-compatible** HTTP endpoint (Ollama, LM Studio, vLLM, etc.) refines each **chunk** after heuristic preprocessing so TTS hears cleaner prose. Implemented in [`narrator/speak_text_llm.py`](../narrator/speak_text_llm.py) and wired in [`narrator/worker.py`](../narrator/worker.py).
 
-**Piper** and **XTTS** always use this pass: [`build_runtime_settings`](../narrator/settings.py) forces `speak_text_llm_enabled` on and defaults `speak_text_llm_model` to **`llama3.2:1b`** when unset. **WinRT** remains opt-in via config. Neural **`setup.bat`** runs [`scripts/setup_ollama_speak_llm.py`](../scripts/setup_ollama_speak_llm.py) to install Ollama (winget) and pull that model.
+**Piper** and **XTTS** default to this pass: [`build_runtime_settings`](../narrator/settings.py) enables `speak_text_llm_enabled` and defaults `speak_text_llm_model` to **`llama3.2:1b`** when unset.  
+For latency-focused runs, set `speak_text_llm_force_for_neural = false` (or env `NARRATOR_SPEAK_TEXT_LLM_FORCE_NEURAL=0`) to allow disabling LLM cleanup for neural engines. **WinRT** remains opt-in via config. Neural **`setup.bat`** runs [`scripts/setup_ollama_speak_llm.py`](../scripts/setup_ollama_speak_llm.py) to install Ollama (winget) and pull that model.
 
 Each request’s system prompt includes a **CONSTRAINTS** block (from [`speak_text_llm.py`](../narrator/speak_text_llm.py)) with `speak_engine`, `speak_text_llm_mode`, TTS segment caps, and bundle limits, **before** the **RULES** section (builtin file + inline + optional file). Small models see hard pipeline limits explicitly.
 
@@ -10,7 +11,7 @@ Each request’s system prompt includes a **CONSTRAINTS** block (from [`speak_te
 
 | Key | Default | Notes |
 |-----|---------|--------|
-| `speak_text_llm_enabled` | `false` (**on** for Piper/XTTS) | WinRT: opt-in via config/env. Piper/XTTS: always on (cannot turn off). |
+| `speak_text_llm_enabled` | `false` (default **on** for Piper/XTTS) | WinRT: opt-in via config/env. For Piper/XTTS this is auto-enabled unless `speak_text_llm_force_for_neural = false`. |
 | `speak_text_llm_base_url` | `http://127.0.0.1:11434/v1` | Root or `/v1` base. Env: `NARRATOR_SPEAK_TEXT_LLM_BASE_URL`. |
 | `speak_text_llm_model` | `""` (**`llama3.2:1b`** for Piper/XTTS if empty) | e.g. `llama3.2:1b` or `llama3.2`. Env: `NARRATOR_SPEAK_TEXT_LLM_MODEL`. |
 | `speak_text_llm_api_key` | — | Optional; often empty for Ollama. Env: `NARRATOR_SPEAK_TEXT_LLM_API_KEY`. |
@@ -18,6 +19,7 @@ Each request’s system prompt includes a **CONSTRAINTS** block (from [`speak_te
 | `speak_text_llm_max_chunk_chars` | `6000` | Truncate each TTS-chunk body before wrapping in a bundle. |
 | `speak_text_llm_bundle_chunks` | `1` | Chunks per LLM request. Default **`1`** — one request per segment, no bundle markers (works with **`llama3.2:1b`**). Set **`2`–`4`** if your model reliably returns matching `<<<CHUNK n>>>` / `<<<END>>>` blocks (more TOC context). |
 | `speak_text_llm_bundle_max_chars` | `16000` | Stop adding chunks to a bundle when the total would exceed this (allows many small XTTS segments in one request). |
+| `speak_text_llm_force_for_neural` | `true` | Keep neural engines (Piper/XTTS) on LLM cleanup by default. Set `false` for lower latency / throughput benchmarks. Env: `NARRATOR_SPEAK_TEXT_LLM_FORCE_NEURAL`. |
 | `speak_text_llm_mode` | `heuristic_then_llm` | `llm_primary` = minimal strip only, then LLM (rules must cover exclusions). |
 | `speak_text_llm_builtin_rules` | `true` | Prepend the packaged [`narrator/default_speak_text_llm_rules.txt`](../narrator/default_speak_text_llm_rules.txt) to the `RULES` block (editorial policy for TTS: boilerplate, tables, cites, symbols, abbrevs, `see names`, `llm_primary`, etc.). Set `false` if you supply a fully custom `speak_text_llm_rules_file`. Env: `NARRATOR_SPEAK_TEXT_LLM_BUILTIN_RULES`. |
 | `speak_text_llm_rules` | `""` | Extra rules (inline), appended after the builtin file. |

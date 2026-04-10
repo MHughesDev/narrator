@@ -82,6 +82,7 @@ def main() -> int:
         whisper_model=None,
         whisper_device=None,
         listen_whisper_refine_punctuation=None,
+        speak_text_llm_force_for_neural=None,
     )
     if settings.speak_engine != "xtts":
         print("ERROR: speak_engine did not resolve to xtts.", file=sys.stderr)

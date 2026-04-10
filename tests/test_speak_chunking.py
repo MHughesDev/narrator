@@ -239,3 +239,26 @@ def test_build_runtime_settings_llm_builtin_rules_false(tmp_path: Path, monkeypa
         verbose=False,
     )
     assert r.speak_text_llm_builtin_rules is False
+
+
+def test_build_runtime_settings_neural_llm_force_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("narrator.settings._resolve_speak_engine", lambda _requested, **kw: "piper")
+    from narrator.settings import build_runtime_settings
+
+    r = build_runtime_settings(
+        config_explicit=None,
+        voice=None,
+        rate=None,
+        volume=None,
+        speak_hotkey=None,
+        listen_hotkey=None,
+        legacy_hotkey=None,
+        silent=False,
+        verbose=False,
+        speak_text_llm_force_for_neural=False,
+    )
+    assert r.speak_engine == "piper"
+    assert r.speak_text_llm_force_for_neural is False
+    assert r.speak_text_llm_enabled is False
