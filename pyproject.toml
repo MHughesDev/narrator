@@ -72,6 +72,12 @@ audio-test = [
 audio-output = [
     "sounddevice>=0.4.6",
 ]
+# Optional VoxCPM-style text normalization (wetext + inflect + regex); see narrator.voxcpm_text_pipeline.
+speak-voxcpm-text = [
+    "wetext",
+    "inflect",
+    "regex",
+]
 
 [project.urls]
 Homepage = "https://github.com/MHughesDev/narrator"

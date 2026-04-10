@@ -113,6 +113,9 @@ class RuntimeSettings:
     speak_prefetch_depth: int = 4
     # Multi-segment speaks: merge segment WAVs into one PCM stream (VoxCPM-style decode-then-concat) before playback.
     speak_audio_stream_compile: bool = True
+    # VoxCPM-like text stages before TTS (markdown/emoji cleanup + optional wetext ``normalize``); see voxcpm_text_pipeline.py.
+    speak_voxcpm_text_pipeline: bool = True
+    speak_voxcpm_text_normalize: bool = False
     # Live speaking-rate hotkeys during playback (see narrator/wav_play_win32.py). Env overrides TOML.
     live_rate_resume_slack_ms: float = 280.0
     post_waveout_close_drain_s: float = 0.35
@@ -846,6 +849,20 @@ def build_runtime_settings(
     elif _ev_sac in ("1", "true", "yes", "on"):
         sac_compile = True
 
+    sv_pipe = bool(cfg.get("speak_voxcpm_text_pipeline", True))
+    _ev_svp = os.environ.get("NARRATOR_SPEAK_VOXCPM_TEXT_PIPELINE", "").strip().lower()
+    if _ev_svp in ("0", "false", "no", "off"):
+        sv_pipe = False
+    elif _ev_svp in ("1", "true", "yes", "on"):
+        sv_pipe = True
+
+    sv_norm = bool(cfg.get("speak_voxcpm_text_normalize", False))
+    _ev_svn = os.environ.get("NARRATOR_SPEAK_VOXCPM_TEXT_NORMALIZE", "").strip().lower()
+    if _ev_svn in ("1", "true", "yes", "on"):
+        sv_norm = True
+    elif _ev_svn in ("0", "false", "no", "off"):
+        sv_norm = False
+
     scc_en = bool(cfg.get("speak_chunk_context_enabled", True))
     _ev_scc = os.environ.get("NARRATOR_SPEAK_CHUNK_CONTEXT_ENABLED", "").strip().lower()
     if _ev_scc in ("1", "true", "yes", "on"):
@@ -957,6 +974,8 @@ def build_runtime_settings(
         speak_chunk_context_trim_ms=scc_tms_f,
         speak_prefetch_depth=spd_final,
         speak_audio_stream_compile=sac_compile,
+        speak_voxcpm_text_pipeline=sv_pipe,
+        speak_voxcpm_text_normalize=sv_norm,
         live_rate_resume_slack_ms=lr_slack_f,
         post_waveout_close_drain_s=pw_drain_f,
         live_rate_safe_chunk_discard=bool(lr_safe),

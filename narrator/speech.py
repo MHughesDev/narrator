@@ -15,6 +15,7 @@ from winrt.windows.media.speechsynthesis import SpeechSynthesizer
 from winrt.windows.storage.streams import DataReader, InputStreamOptions
 
 from narrator.protocol import SHUTDOWN, SPEAK_RATE_DOWN, SPEAK_RATE_UP, SPEAK_TOGGLE
+from narrator.voxcpm_text_pipeline import apply_voxcpm_style_text_for_tts
 
 if TYPE_CHECKING:
     from narrator.playback_result import PlayWavResult
@@ -512,6 +513,7 @@ def synthesize_to_path_prefetch(
 
     Used to generate the *next* WAV while the current segment plays so playback can stay continuous.
     """
+    text = apply_voxcpm_style_text_for_tts(text, settings)
     try:
         if settings.speak_engine == "piper":
             from narrator.tts_piper import synthesize_piper_to_path
@@ -576,6 +578,7 @@ def synthesize_with_queue_cancel(
     Returns:
         ``(success, shutdown_requested)`` — success False if cancelled or error; shutdown True if shutdown seen.
     """
+    text = apply_voxcpm_style_text_for_tts(text, settings)
     if settings.speak_engine == "piper":
         ok, shutdown_requested = _synthesize_piper_with_queue_cancel(text, path, settings, event_queue)
     elif settings.speak_engine == "xtts":
