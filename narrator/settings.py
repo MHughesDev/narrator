@@ -111,6 +111,8 @@ class RuntimeSettings:
     speak_chunk_context_trim_ms: float = 400.0
     # How many upcoming WAV segments to buffer while playing (worker producer queue; env NARRATOR_SPEAK_PREFETCH_DEPTH).
     speak_prefetch_depth: int = 4
+    # Multi-segment speaks: merge segment WAVs into one PCM stream (VoxCPM-style decode-then-concat) before playback.
+    speak_audio_stream_compile: bool = True
     # Live speaking-rate hotkeys during playback (see narrator/wav_play_win32.py). Env overrides TOML.
     live_rate_resume_slack_ms: float = 280.0
     post_waveout_close_drain_s: float = 0.35
@@ -837,6 +839,13 @@ def build_runtime_settings(
             pass
     spd_final = max(1, min(32, spd_i))
 
+    sac_compile = bool(cfg.get("speak_audio_stream_compile", True))
+    _ev_sac = os.environ.get("NARRATOR_SPEAK_AUDIO_STREAM_COMPILE", "").strip().lower()
+    if _ev_sac in ("0", "false", "no", "off"):
+        sac_compile = False
+    elif _ev_sac in ("1", "true", "yes", "on"):
+        sac_compile = True
+
     scc_en = bool(cfg.get("speak_chunk_context_enabled", True))
     _ev_scc = os.environ.get("NARRATOR_SPEAK_CHUNK_CONTEXT_ENABLED", "").strip().lower()
     if _ev_scc in ("1", "true", "yes", "on"):
@@ -947,6 +956,7 @@ def build_runtime_settings(
         speak_chunk_context_trim_mode=scc_mode,
         speak_chunk_context_trim_ms=scc_tms_f,
         speak_prefetch_depth=spd_final,
+        speak_audio_stream_compile=sac_compile,
         live_rate_resume_slack_ms=lr_slack_f,
         post_waveout_close_drain_s=pw_drain_f,
         live_rate_safe_chunk_discard=bool(lr_safe),

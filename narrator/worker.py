@@ -15,6 +15,12 @@ from pathlib import Path
 from uiautomation import InitializeUIAutomationInCurrentThread, UninitializeUIAutomationInCurrentThread
 
 from narrator import audio_debug, capture, speech
+from narrator.audio_pcm import wav_write_pcm
+from narrator.audio_stream_compile import (
+    CompiledUtteranceState,
+    combined_utterance_label,
+    merge_segment_wav_into_state,
+)
 from narrator.speak_chunking import (
     XTTS_MAX_CHARS_PER_SEGMENT,
     effective_speak_chunk_max_chars,
@@ -771,7 +777,147 @@ def _speak_worker_loop_impl(event_queue: queue.Queue, settings: RuntimeSettings)
             set_phase(Phase.IDLE)
             continue
 
-        if len(work_items) > 1 or prefetch_dynamic:
+        compile_mode = bool(getattr(settings, "speak_audio_stream_compile", True)) and len(work_items) > 1
+
+        if compile_mode:
+            state = CompiledUtteranceState()
+            try:
+                merge_segment_wav_into_state(state, wav_path, settings)
+            except Exception as e:
+                logger.error("Speak stream compile: first segment merge failed: %s", e)
+                wav_path.unlink(missing_ok=True)
+                set_phase(Phase.IDLE)
+                if settings.beep_on_failure:
+                    _beep_failure()
+                continue
+            wav_path.unlink(missing_ok=True)
+
+            def _compile_synthesize_rest() -> bool:
+                """Sequential synth+merge (ordered), same engines as prefetch — VoxCPM-style concat stream."""
+                idx = 1
+                while True:
+                    cancel_c, shut_c = _drain_cancel_or_shutdown(event_queue, settings)
+                    if shut_c:
+                        return False
+                    if cancel_c:
+                        return False
+                    if suffix_failed.is_set() or prefix_llm_failed.is_set():
+                        return False
+                    with work_items_lock:
+                        n = len(work_items)
+                    if idx < n:
+                        tmp_c = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                        tmp_c.close()
+                        pth = Path(tmp_c.name)
+                        synth_t, _utt, ctx_t, _lab = work_items[idx]
+                        ok_c, shut_c = speech.synthesize_with_queue_cancel(
+                            synth_t, pth, settings, event_queue, context_prefix=ctx_t
+                        )
+                        if shut_c:
+                            pth.unlink(missing_ok=True)
+                            return False
+                        if not ok_c:
+                            pth.unlink(missing_ok=True)
+                            return False
+                        try:
+                            merge_segment_wav_into_state(state, pth, settings)
+                        except Exception as e:
+                            logger.error("Speak stream compile: merge failed at segment %d: %s", idx, e)
+                            pth.unlink(missing_ok=True)
+                            return False
+                        pth.unlink(missing_ok=True)
+                        idx += 1
+                        continue
+                    if prefetch_dynamic:
+                        if prefix_llm_done.is_set() and suffix_done.is_set() and idx >= n:
+                            break
+                        time.sleep(0.015)
+                        continue
+                    break
+                return True
+
+            compile_ok = True
+            if not prefetch_dynamic:
+                for idx in range(1, len(work_items)):
+                    cancel_c, shut_c = _drain_cancel_or_shutdown(event_queue, settings)
+                    if shut_c:
+                        speech.stop_playback()
+                        logger.info("Speak worker shutdown")
+                        set_phase(Phase.IDLE)
+                        compile_ok = False
+                        break
+                    if cancel_c:
+                        set_phase(Phase.IDLE)
+                        compile_ok = False
+                        break
+                    tmp_c = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                    tmp_c.close()
+                    pth = Path(tmp_c.name)
+                    synth_t, _utt, ctx_t, _lab = work_items[idx]
+                    ok_c, shut_c = speech.synthesize_with_queue_cancel(
+                        synth_t, pth, settings, event_queue, context_prefix=ctx_t
+                    )
+                    if shut_c:
+                        pth.unlink(missing_ok=True)
+                        speech.stop_playback()
+                        logger.info("Speak worker shutdown")
+                        set_phase(Phase.IDLE)
+                        compile_ok = False
+                        break
+                    if not ok_c:
+                        pth.unlink(missing_ok=True)
+                        set_phase(Phase.IDLE)
+                        logger.warning(
+                            "Synthesis failed — hover over readable prose and try again."
+                        )
+                        if settings.beep_on_failure:
+                            _beep_failure()
+                        compile_ok = False
+                        break
+                    try:
+                        merge_segment_wav_into_state(state, pth, settings)
+                    except Exception as e:
+                        logger.error("Speak stream compile: merge failed at segment %d: %s", idx, e)
+                        pth.unlink(missing_ok=True)
+                        set_phase(Phase.IDLE)
+                        if settings.beep_on_failure:
+                            _beep_failure()
+                        compile_ok = False
+                        break
+                    pth.unlink(missing_ok=True)
+            else:
+                compile_ok = _compile_synthesize_rest()
+
+            if not compile_ok:
+                speech.stop_playback()
+                set_phase(Phase.IDLE)
+                continue
+
+            tmp_f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            tmp_f.close()
+            wav_path = Path(tmp_f.name)
+            try:
+                wav_write_pcm(
+                    wav_path,
+                    state.channels,
+                    state.sampwidth,
+                    state.framerate,
+                    state.pcm,
+                )
+            except Exception as e:
+                logger.error("Speak stream compile: write WAV failed: %s", e)
+                wav_path.unlink(missing_ok=True)
+                set_phase(Phase.IDLE)
+                if settings.beep_on_failure:
+                    _beep_failure()
+                continue
+            if settings.verbose:
+                logger.debug(
+                    "Speak audio stream compile: merged %d segments into one clip",
+                    state.segments_merged,
+                )
+
+        if (not compile_mode) and (len(work_items) > 1 or prefetch_dynamic):
             producer_thread = threading.Thread(
                 target=_run_prefetch_producer,
                 name="narrator-speak-prefetch",
@@ -786,12 +932,20 @@ def _speak_worker_loop_impl(event_queue: queue.Queue, settings: RuntimeSettings)
                     prefetch_dynamic,
                 )
 
+        playback_items = (
+            [(None, combined_utterance_label(work_items), None, "compiled")]
+            if compile_mode
+            else work_items
+        )
+
         seg_idx = 0
-        while seg_idx < len(work_items):
+        while seg_idx < len(playback_items):
             any_played = True
             set_phase(Phase.PLAYING)
-            _, utterance_text, _, seg_label = work_items[seg_idx]
-            if len(work_items) > 1:
+            _, utterance_text, _, seg_label = playback_items[seg_idx]
+            if compile_mode:
+                logger.info("Playing compiled stream (%d chars)", len(utterance_text))
+            elif len(playback_items) > 1:
                 logger.info("Playing segment %s (%d chars)", seg_label, len(utterance_text))
             else:
                 logger.info("Playing (%d chars)", len(utterance_text))
@@ -823,9 +977,10 @@ def _speak_worker_loop_impl(event_queue: queue.Queue, settings: RuntimeSettings)
                     settings=settings,
                     rate_baked_in_wav=float(settings.speaking_rate),
                     utterance_text=utterance_text,
-                    crossfade_prev_pcm=cross_carry,
+                    crossfade_prev_pcm=None if compile_mode else cross_carry,
                 )
-                cross_carry = play_result.crossfade_tail_pcm
+                if not compile_mode:
+                    cross_carry = play_result.crossfade_tail_pcm
                 if play_result.resynth_remainder_text:
                     utterance_text = play_result.resynth_remainder_text
                     _unlink_wav_if_path(wav_path)
@@ -858,8 +1013,8 @@ def _speak_worker_loop_impl(event_queue: queue.Queue, settings: RuntimeSettings)
             )
 
             seg_idx += 1
-            if seg_idx >= len(work_items):
-                if not prefetch_dynamic:
+            if seg_idx >= len(playback_items):
+                if compile_mode or not prefetch_dynamic:
                     break
                 if suffix_done.is_set() and prefix_llm_done.is_set():
                     break
