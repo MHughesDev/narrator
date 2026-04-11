@@ -104,7 +104,16 @@ def resolve_piper_onnx_path(
     return None
 
 
-_voice_cache: dict[tuple[str, bool], Any] = {}
+_voice_cache: dict[tuple[str, bool, str, int, int], Any] = {}
+
+
+def _piper_cache_key(settings: "RuntimeSettings", onnx_path: Path) -> tuple[str, bool, str, int, int]:
+    algo = str(getattr(settings, "piper_onnx_cudnn_conv_algo_search", "heuristic")).strip().lower()
+    if algo not in ("heuristic", "exhaustive", "default"):
+        algo = "heuristic"
+    intra = int(getattr(settings, "piper_onnx_intra_op_num_threads", 0) or 0)
+    inter = int(getattr(settings, "piper_onnx_inter_op_num_threads", 0) or 0)
+    return (str(onnx_path.resolve()), bool(settings.piper_cuda), algo, intra, inter)
 
 
 def ensure_piper_voice_loaded(settings: "RuntimeSettings") -> None:
@@ -112,9 +121,54 @@ def ensure_piper_voice_loaded(settings: "RuntimeSettings") -> None:
     _get_piper_voice(settings)
 
 
-def _get_piper_voice(settings: "RuntimeSettings") -> Any:
+def _cudnn_algo_map(settings: "RuntimeSettings") -> str:
+    m = str(getattr(settings, "piper_onnx_cudnn_conv_algo_search", "heuristic")).strip().lower()
+    if m == "exhaustive":
+        return "EXHAUSTIVE"
+    if m == "default":
+        return "DEFAULT"
+    return "HEURISTIC"
+
+
+def _load_piper_voice_with_settings(onnx_path: Path, settings: "RuntimeSettings") -> Any:
+    """Load PiperVoice with configurable ONNX Runtime session (CUDA conv search, thread counts)."""
+    import json
+
+    import onnxruntime as ort
+    from piper.config import PiperConfig
     from piper.voice import PiperVoice
 
+    config_path = f"{onnx_path}.json"
+    with open(config_path, "r", encoding="utf-8") as f:
+        config_dict = json.load(f)
+    sess_opt = ort.SessionOptions()
+    intra = int(getattr(settings, "piper_onnx_intra_op_num_threads", 0) or 0)
+    inter = int(getattr(settings, "piper_onnx_inter_op_num_threads", 0) or 0)
+    if intra > 0:
+        sess_opt.intra_op_num_threads = intra
+    if inter > 0:
+        sess_opt.inter_op_num_threads = inter
+
+    use_cuda = bool(settings.piper_cuda)
+    if use_cuda:
+        providers: list = [
+            (
+                "CUDAExecutionProvider",
+                {"cudnn_conv_algo_search": _cudnn_algo_map(settings)},
+            )
+        ]
+    else:
+        providers = ["CPUExecutionProvider"]
+
+    session = ort.InferenceSession(
+        str(onnx_path),
+        sess_options=sess_opt,
+        providers=providers,
+    )
+    return PiperVoice(config=PiperConfig.from_dict(config_dict), session=session)
+
+
+def _get_piper_voice(settings: "RuntimeSettings") -> Any:
     vid = effective_piper_voice_id(settings.voice_name, settings.piper_voice)
     path = resolve_piper_onnx_path_from_settings(settings)
     if path is None:
@@ -123,9 +177,18 @@ def _get_piper_voice(settings: "RuntimeSettings") -> Any:
             f"Expected {default_piper_data_dir() / (vid + '.onnx')} or set piper_model_path in config. "
             "Run: python scripts/prefetch_piper_voice.py",
         )
-    key = (str(path.resolve()), bool(settings.piper_cuda))
+    key = _piper_cache_key(settings, path)
     if key not in _voice_cache:
-        _voice_cache[key] = PiperVoice.load(str(path), use_cuda=bool(settings.piper_cuda))
+        try:
+            _voice_cache[key] = _load_piper_voice_with_settings(path, settings)
+        except Exception as e:
+            logger.warning(
+                "Piper custom ONNX session failed (%s); falling back to PiperVoice.load.",
+                e,
+            )
+            from piper.voice import PiperVoice
+
+            _voice_cache[key] = PiperVoice.load(str(path), use_cuda=bool(settings.piper_cuda))
     return _voice_cache[key]
 
 

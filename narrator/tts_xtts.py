@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
 import os
@@ -10,7 +11,7 @@ import tempfile
 import threading
 import wave
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from narrator.settings import RuntimeSettings
@@ -25,6 +26,7 @@ def is_xtts_available() -> bool:
     """True if ``coqui-tts`` can be imported and loads (import check only; does not download weights)."""
     try:
         import TTS  # noqa: F401
+
         return True
     except Exception:
         # ImportError if missing; OSError if torch DLLs break on this machine.
@@ -33,9 +35,13 @@ def is_xtts_available() -> bool:
 
 _lock = threading.Lock()
 _clone_ref_lock = threading.Lock()
+_conditioning_lock = threading.Lock()
 _tts = None
 _cached_model: Optional[str] = None
 _cached_gpu: Optional[bool] = None
+_cached_deepspeed: Optional[bool] = None
+# speaker_wav path|mtime|model -> (gpt_latent, speaker_emb) on CPU for reuse
+_conditioning_cache: dict[str, tuple[Any, Any]] = {}
 
 # XTTS v1.1 has no built-in named speakers (unlike v2’s speakers_xtts.pth). Cloning needs ~3–10s of reference audio.
 _XTTS_CLONE_REF_TEXT = "Hello. This short clip is the default voice reference for speech synthesis."
@@ -55,9 +61,29 @@ def _gpu_flag(settings: "RuntimeSettings") -> bool:
     return torch.cuda.is_available()
 
 
+def _maybe_reload_xtts_deepspeed(tts, settings: "RuntimeSettings") -> None:
+    """Re-run load_checkpoint with use_deepspeed=True (Coqui-recommended for faster GPT)."""
+    if not bool(getattr(settings, "xtts_use_deepspeed", False)):
+        return
+    try:
+        syn = getattr(tts, "synthesizer", None)
+        if syn is None:
+            return
+        model = getattr(syn, "tts_model", None)
+        cfg = getattr(syn, "tts_config", None)
+        ckpt = getattr(syn, "tts_checkpoint", None)
+        if model is None or cfg is None or ckpt is None:
+            return
+        ckpt_dir = ckpt if Path(ckpt).is_dir() else Path(ckpt).parent
+        model.load_checkpoint(cfg, checkpoint_dir=ckpt_dir, eval=True, use_deepspeed=True)
+        logger.info("XTTS: DeepSpeed enabled via load_checkpoint(use_deepspeed=True)")
+    except Exception as e:
+        logger.warning("XTTS DeepSpeed not applied (install deepspeed or check GPU): %s", e)
+
+
 def get_tts(settings: "RuntimeSettings"):
     """Load and cache ``TTS`` model (first call downloads checkpoints)."""
-    global _tts, _cached_model, _cached_gpu
+    global _tts, _cached_model, _cached_gpu, _cached_deepspeed
 
     # Coqui may block on stdin for CPML unless agreed (breaks GUI / hotkey apps).
     if not (os.environ.get("COQUI_TOS_AGREED") or "").strip():
@@ -71,8 +97,14 @@ def get_tts(settings: "RuntimeSettings"):
 
     model = settings.xtts_model.strip() or DEFAULT_XTTS_MODEL_ID
     gpu = _gpu_flag(settings)
+    want_ds = bool(getattr(settings, "xtts_use_deepspeed", False))
     with _lock:
-        if _tts is not None and _cached_model == model and _cached_gpu == gpu:
+        if (
+            _tts is not None
+            and _cached_model == model
+            and _cached_gpu == gpu
+            and _cached_deepspeed == want_ds
+        ):
             return _tts
         logger.info(
             "Loading XTTS model %r (gpu=%s). First run downloads a large checkpoint; this can take several minutes.",
@@ -94,8 +126,10 @@ def get_tts(settings: "RuntimeSettings"):
             _tts = _tts.to(dev)
         except Exception as e:
             logger.debug("Coqui TTS .to(device) skipped: %s", e)
+        _maybe_reload_xtts_deepspeed(_tts, settings)
         _cached_model = model
         _cached_gpu = gpu
+        _cached_deepspeed = want_ds
         return _tts
 
 
@@ -233,6 +267,67 @@ def _concat_wav_files(paths: list[Path], out: Path) -> None:
         wf.writeframes(np.asarray(x, dtype=np.int16).tobytes())
 
 
+def _conditioning_cache_key(spath: Path, model: str) -> str:
+    try:
+        st = spath.stat()
+        mtime = int(st.st_mtime)
+    except OSError:
+        mtime = 0
+    return f"{spath.resolve()}|{mtime}|{model}"
+
+
+def _get_cached_clone_latents(key: str, settings: "RuntimeSettings") -> tuple[Any, Any] | None:
+    if not bool(getattr(settings, "xtts_cache_conditioning_latents", True)):
+        return None
+    with _conditioning_lock:
+        hit = _conditioning_cache.get(key)
+    return hit
+
+
+def _set_cached_clone_latents(key: str, latents: tuple[Any, Any], settings: "RuntimeSettings") -> None:
+    if not bool(getattr(settings, "xtts_cache_conditioning_latents", True)):
+        return
+    with _conditioning_lock:
+        _conditioning_cache[key] = latents
+
+
+def _get_clone_latents_from_wav(
+    tts,
+    spath: Path,
+    settings: "RuntimeSettings",
+) -> tuple[Any, Any]:
+    """Compute or return cached (gpt_cond_latent, speaker_embedding) for clone mode."""
+    import torch
+
+    model = (settings.xtts_model or "").strip() or DEFAULT_XTTS_MODEL_ID
+    key = _conditioning_cache_key(spath, model)
+    hit = _get_cached_clone_latents(key, settings)
+    if hit is not None:
+        return hit
+
+    m = tts.synthesizer.tts_model
+    gpt_lat, spk_emb = m.get_conditioning_latents(audio_path=str(spath))
+    # Keep on CPU for cache to avoid VRAM duplication; inference() moves to device
+    if isinstance(gpt_lat, torch.Tensor):
+        gpt_lat = gpt_lat.detach().cpu()
+    if isinstance(spk_emb, torch.Tensor):
+        spk_emb = spk_emb.detach().cpu()
+    _set_cached_clone_latents(key, (gpt_lat, spk_emb), settings)
+    return gpt_lat, spk_emb
+
+
+def _autocast_ctx(settings: "RuntimeSettings"):
+    import torch
+
+    if not bool(getattr(settings, "xtts_torch_autocast", False)):
+        return contextlib.nullcontext()
+    if not torch.cuda.is_available():
+        return contextlib.nullcontext()
+    dt = str(getattr(settings, "xtts_autocast_dtype", "float16")).lower()
+    dtype = torch.float16 if dt != "bfloat16" else torch.bfloat16
+    return torch.autocast(device_type="cuda", dtype=dtype)
+
+
 def _tts_to_file_one(
     tts,
     text: str,
@@ -243,6 +338,8 @@ def _tts_to_file_one(
     lang: str,
     split_sentences: bool,
     use_inference_mode: bool,
+    clone_latents: tuple[Any, Any] | None,
+    settings: "RuntimeSettings",
 ) -> None:
     common: dict = dict(
         text=text,
@@ -253,11 +350,72 @@ def _tts_to_file_one(
     if "speed" in inspect.signature(tts.tts_to_file).parameters:
         common["speed"] = 1.0
 
-    def _run() -> None:
+    def _run_high_level() -> None:
         if spath is not None:
             tts.tts_to_file(speaker_wav=str(spath), **common)
         else:
             tts.tts_to_file(speaker=speaker, **common)
+
+    def _run_inference_clone(gpt_lat: Any, spk_emb: Any) -> None:
+        import numpy as np
+
+        m = tts.synthesizer.tts_model
+        lang_code = (lang or "en").split("-")[0]
+        use_stream = bool(getattr(settings, "xtts_inference_stream", False))
+        speed = 1.0
+        enable_split = split_sentences
+
+        def _synth():
+            if use_stream:
+                chunks: list = []
+                for wchunk in m.inference_stream(
+                    text,
+                    lang_code,
+                    gpt_lat,
+                    spk_emb,
+                    stream_chunk_size=int(getattr(settings, "xtts_stream_chunk_size", 20)),
+                    overlap_wav_len=int(getattr(settings, "xtts_stream_overlap_wav_len", 1024)),
+                    speed=speed,
+                    enable_text_splitting=enable_split,
+                ):
+                    if hasattr(wchunk, "cpu"):
+                        chunks.append(wchunk.cpu().numpy().ravel())
+                    else:
+                        chunks.append(np.asarray(wchunk).ravel())
+                return np.concatenate(chunks) if chunks else np.array([], dtype=np.float32)
+            out = m.inference(
+                text,
+                lang_code,
+                gpt_lat,
+                spk_emb,
+                speed=speed,
+                enable_text_splitting=enable_split,
+            )
+            return out["wav"]
+
+        with _autocast_ctx(settings):
+            wav = _synth()
+        sr = int(getattr(tts.synthesizer, "output_sample_rate", 24000))
+        tts.synthesizer.save_wav(wav=wav, path=str(out_path), sample_rate=sr)
+
+    def _run() -> None:
+        # Named speakers (e.g. v2): high-level API handles speaker_manager lookups.
+        if spath is None:
+            _run_high_level()
+            return
+        lat = clone_latents
+        if lat is None:
+            try:
+                lat = _get_clone_latents_from_wav(tts, spath, settings)
+            except Exception as e:
+                logger.debug("XTTS get_conditioning_latents failed, using tts_to_file: %s", e)
+                _run_high_level()
+                return
+        try:
+            _run_inference_clone(lat[0], lat[1])
+        except Exception as e:
+            logger.warning("XTTS inference() failed, falling back to tts_to_file: %s", e)
+            _run_high_level()
 
     if use_inference_mode:
         try:
@@ -312,6 +470,14 @@ def synthesize_xtts_to_path(path: Path, text: str, settings: "RuntimeSettings") 
     coqui_split = bool(getattr(settings, "xtts_split_sentences", False))
     infer_mode = bool(getattr(settings, "xtts_torch_inference_mode", True))
 
+    clone_latents: tuple[Any, Any] | None = None
+    if spath is not None:
+        try:
+            clone_latents = _get_clone_latents_from_wav(tts, spath, settings)
+        except Exception as e:
+            logger.debug("XTTS conditioning latents prefetch skipped: %s", e)
+            clone_latents = None
+
     if len(pieces) == 1:
         _tts_to_file_one(
             tts,
@@ -322,6 +488,8 @@ def synthesize_xtts_to_path(path: Path, text: str, settings: "RuntimeSettings") 
             lang=lang,
             split_sentences=coqui_split,
             use_inference_mode=infer_mode,
+            clone_latents=clone_latents,
+            settings=settings,
         )
     else:
         tmp_paths: list[Path] = []
@@ -340,6 +508,8 @@ def synthesize_xtts_to_path(path: Path, text: str, settings: "RuntimeSettings") 
                     lang=lang,
                     split_sentences=coqui_split,
                     use_inference_mode=infer_mode,
+                    clone_latents=clone_latents,
+                    settings=settings,
                 )
             _concat_wav_files(tmp_paths, path)
         finally:

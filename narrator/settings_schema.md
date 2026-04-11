@@ -74,6 +74,16 @@ Files are merged in order; later files override earlier keys. Standard paths: `%
 | `xtts_speaker_wav` | string | — | Optional reference WAV for voice cloning (overrides speaker / voice). |
 | `xtts_split_sentences` | bool | `false` | Coqui: when `true`, splits each chunk into sentences and synthesizes separately (more round-trips, often **slower**). Default **false** — Narrator already chunks long text; use `true` only if you hit model length limits. Env: `NARRATOR_XTTS_SPLIT_SENTENCES`. |
 | `xtts_torch_inference_mode` | bool | `true` | Wrap XTTS `tts_to_file` in ``torch.inference_mode()`` when PyTorch is available. Env: `NARRATOR_XTTS_TORCH_INFERENCE_MODE`. |
+| `xtts_torch_autocast` | bool | `false` | CUDA: wrap clone-path ``inference`` / ``inference_stream`` in ``torch.autocast`` (fp16/bfloat16). Can change quality slightly. Env: `NARRATOR_XTTS_TORCH_AUTOCAST`. |
+| `xtts_autocast_dtype` | string | `float16` | `float16` or `bfloat16` (Ampere+). Env: `NARRATOR_XTTS_AUTOCAST_DTYPE`. |
+| `xtts_use_deepspeed` | bool | `false` | After load, re-run Coqui ``load_checkpoint(..., use_deepspeed=True)`` (requires `pip install deepspeed`). Env: `NARRATOR_XTTS_USE_DEEPSPEED`. |
+| `xtts_cache_conditioning_latents` | bool | `true` | Cache clone ``get_conditioning_latents`` per `speaker_wav` path + mtime + model id. Env: `NARRATOR_XTTS_CACHE_CONDITIONING_LATENTS`. |
+| `xtts_inference_stream` | bool | `false` | Clone mode: use ``Xtts.inference_stream`` for faster first samples (still one WAV per chunk). Env: `NARRATOR_XTTS_INFERENCE_STREAM`. |
+| `xtts_stream_chunk_size` | int | `20` | Coqui streaming chunk size (see upstream XTTS). |
+| `xtts_stream_overlap_wav_len` | int | `1024` | Samples overlap for streaming chunk join. |
+| `piper_onnx_cudnn_conv_algo_search` | string | `heuristic` | CUDA EP: `heuristic` (Piper default), `exhaustive` (may be faster after warmup), or `default`. Env: `NARRATOR_PIPER_ONNX_CUDNN_CONV_ALGO_SEARCH`. |
+| `piper_onnx_intra_op_num_threads` | int | `0` | ONNX Runtime intra-op threads (`0` = ORT default). |
+| `piper_onnx_inter_op_num_threads` | int | `0` | ONNX Runtime inter-op threads (`0` = ORT default). |
 | `live_rate_resume_slack_ms` | float | `280` | Extra milliseconds of PCM skipped ahead after `waveOutGetPosition` when using **sample-accurate** seek (chunk discard off). Ignored when chunk discard is on. |
 | `post_waveout_close_drain_s` | float | `0.35` | Seconds to sleep after `waveOutClose` before reopening the device on live rate change. |
 | `live_rate_safe_chunk_discard` | bool | `true` | **Recommended default:** resume at the **next** chunk boundary (do not use `waveOutGetPosition` for the cut) — avoids echo when the driver lags the DAC. Set `false` for sample-accurate seek (smaller gaps; may echo). Env: `NARRATOR_LIVE_RATE_ACCURATE_SEEK=1` forces accurate seek; `NARRATOR_LIVE_RATE_SAFE=1` forces chunk discard. |

@@ -27,24 +27,26 @@
 - **Fastest first speech** on neural engines: keep **`speak_audio_stream_compile = false`**, enable warmup (defaults), avoid LLM text pass if not needed (`speak_text_llm_force_for_neural = false`), use **`scripts/prefetch_xtts_model.py`** so weights are already on disk.
 - **Smoothest single-file playback** for long multi-segment speaks: set **`speak_audio_stream_compile = true`** (accept longer wait before audio starts).
 
-## Beyond VoxCPM — Coqui XTTS (research / community)
+## Beyond VoxCPM — Coqui XTTS (implemented knobs)
 
-Narrator is not VoxCPM, but **Coqui XTTS** has well-known levers ([XTTS docs](https://github.com/coqui-ai/TTS/blob/dev/docs/source/models/xtts.md), [HF discussion](https://huggingface.co/coqui/XTTS-v2/discussions/10)):
+| Setting | What it does |
+|---------|----------------|
+| **`xtts_split_sentences`** | Coqui `tts_to_file` only; default **false** (fewer forward passes). |
+| **`xtts_torch_inference_mode`** | Wraps synthesis in `torch.inference_mode()`. |
+| **`xtts_torch_autocast`** | For **clone** path using `Xtts.inference` / `inference_stream`, enables `torch.autocast` on CUDA (`xtts_autocast_dtype`: float16 or bfloat16). |
+| **`xtts_use_deepspeed`** | After initial load, re-invokes `load_checkpoint(..., use_deepspeed=True)` on the underlying model (requires `pip install deepspeed`). Model cache key includes this flag. |
+| **`xtts_cache_conditioning_latents`** | Caches `get_conditioning_latents()` tensors (CPU) keyed by `speaker_wav` path, mtime, and model id. |
+| **Clone path: `inference()` / `inference_stream()`** | When `speaker_wav` is set (or Piper-built ref), we call `Xtts.inference` or `inference_stream` with **one** `get_conditioning_latents` per session (cached), instead of `tts_to_file` re-encoding the reference every time. Falls back to `tts_to_file` on error. Named speakers (v2) still use `tts_to_file`. |
+| **`xtts_inference_stream`** | Uses `inference_stream` instead of full-buffer `inference` (lower time to first samples inside the WAV write). |
 
-| Technique | Notes |
-|-----------|--------|
-| **Keep the model loaded** | We cache one `TTS` instance in-process (`get_tts`). Avoid restarting the app between speaks. |
-| **`split_sentences`** | Coqui’s `tts_to_file(..., split_sentences=True)` runs **one forward pass per sentence**. Narrator already splits long text in `synthesize_xtts_to_path`; we default **`xtts_split_sentences = false`** so each Narrator chunk is **one** Coqui call when possible. Set `true` only if you hit length limits on huge single chunks. Env: `NARRATOR_XTTS_SPLIT_SENTENCES`. |
-| **`torch.inference_mode()`** | Optional wrapper around synthesis (default **on** via `xtts_torch_inference_mode`) — small autograd overhead reduction. Env: `NARRATOR_XTTS_TORCH_INFERENCE_MODE`. |
-| **`.to("cuda")`** | After load, we move the Coqui `TTS` module to GPU when `gpu=True` so parameters follow the documented pattern. |
-| **DeepSpeed** | Upstream reports lower latency with `use_deepspeed=True` on **manual** `Xtts` checkpoint loading — not exposed by our high-level `TTS` API path; advanced users would need a custom integration. |
-| **Cache `gpt_cond_latent` / `speaker_embedding`** | For a **fixed** `speaker_wav`, Coqui docs recommend caching conditioning latents between calls. We do not cache these yet (speaker or reference can change per settings); a future optimization could cache keyed by resolved WAV path + model id. |
-| **Streaming `inference_stream`** | Coqui supports chunk streaming for faster **first** audio; our pipeline is file-based (`tts_to_file`). Adopting it would mean a larger worker/playback refactor. |
+References: [Coqui XTTS docs](https://github.com/coqui-ai/TTS/blob/dev/docs/source/models/xtts.md), [HF DeepSpeed note](https://huggingface.co/coqui/XTTS-v2/discussions/10).
 
-## Piper / ONNX (GPU)
+## Piper / ONNX (implemented)
 
-- **`piper_cuda = true`** uses the Piper ONNX path on GPU when `onnxruntime-gpu` matches your CUDA stack.
-- ONNX Runtime tuning (TensorRT EP, CUDA EP `cudnn_conv_algo_search`, I/O binding) is **outside** the `piper-tts` Python API we call — worth profiling only if Piper is your primary engine.
+- **`piper_cuda`** — CUDA execution provider when `onnxruntime-gpu` is installed.
+- **`piper_onnx_cudnn_conv_algo_search`** — `heuristic` (matches stock Piper), `exhaustive`, or `default` for the CUDA EP (see [ONNX Runtime CUDA EP](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)).
+- **`piper_onnx_intra_op_num_threads`** / **`piper_onnx_inter_op_num_threads`** — optional ORT `SessionOptions` tuning.
+- Implementation builds `onnxruntime.InferenceSession` manually (same pattern as upstream `PiperVoice.load`) and falls back to `PiperVoice.load` if construction fails.
 
 ## System-level ideas (brainstorm)
 

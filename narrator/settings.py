@@ -37,11 +37,27 @@ class RuntimeSettings:
     xtts_split_sentences: bool = False
     # Wrap XTTS synthesis in ``torch.inference_mode()`` when available (slightly less autograd overhead).
     xtts_torch_inference_mode: bool = True
+    # ``torch.autocast`` (fp16/bfloat16 on CUDA) for XTTS — small speedup; can affect quality.
+    xtts_torch_autocast: bool = False
+    xtts_autocast_dtype: str = "float16"  # float16 | bfloat16 (Ampere+)
+    # Re-call Coqui ``load_checkpoint(..., use_deepspeed=True)`` after load (requires ``pip install deepspeed``).
+    xtts_use_deepspeed: bool = False
+    # Cache clone conditioning latents (gpt + speaker) per resolved speaker_wav path + mtime (faster repeated speaks).
+    xtts_cache_conditioning_latents: bool = True
+    # Use ``Xtts.inference_stream`` for single-piece synthesis (lower time-to-first-sample; still writes one WAV).
+    xtts_inference_stream: bool = False
+    xtts_stream_chunk_size: int = 20
+    xtts_stream_overlap_wav_len: int = 1024
     # Piper TTS (optional extra speak-piper): ONNX + JSON from rhasspy/piper-voices.
     piper_voice: str = DEFAULT_PIPER_VOICE_ID
     piper_model_dir: Optional[str] = None
     piper_model_path: Optional[str] = None
     piper_cuda: bool = False
+    # ONNX Runtime: cuDNN conv search (EXHAUSTIVE can be faster after warmup; HEURISTIC is Piper default).
+    piper_onnx_cudnn_conv_algo_search: str = "heuristic"  # heuristic | exhaustive | default
+    # Optional: extra ORT session threads (0 = ORT default).
+    piper_onnx_intra_op_num_threads: int = 0
+    piper_onnx_inter_op_num_threads: int = 0
     # Listen: "winrt" = live Windows dictation; "whisper" = record then faster-whisper (higher quality).
     listen_engine: str = "winrt"
     whisper_model: str = "base"
@@ -764,6 +780,70 @@ def build_runtime_settings(
     elif _ev_xim in ("1", "true", "yes", "on"):
         xtts_im = True
 
+    xtts_ac = bool(cfg.get("xtts_torch_autocast", False))
+    _ev_xac = os.environ.get("NARRATOR_XTTS_TORCH_AUTOCAST", "").strip().lower()
+    if _ev_xac in ("1", "true", "yes", "on"):
+        xtts_ac = True
+    elif _ev_xac in ("0", "false", "no", "off"):
+        xtts_ac = False
+
+    xtts_adt = str(cfg.get("xtts_autocast_dtype", "float16")).strip().lower()
+    if xtts_adt not in ("float16", "bfloat16"):
+        xtts_adt = "float16"
+    _ev_xadt = os.environ.get("NARRATOR_XTTS_AUTOCAST_DTYPE", "").strip().lower()
+    if _ev_xadt in ("float16", "bfloat16"):
+        xtts_adt = _ev_xadt
+
+    xtts_ds = bool(cfg.get("xtts_use_deepspeed", False))
+    _ev_xds = os.environ.get("NARRATOR_XTTS_USE_DEEPSPEED", "").strip().lower()
+    if _ev_xds in ("1", "true", "yes", "on"):
+        xtts_ds = True
+    elif _ev_xds in ("0", "false", "no", "off"):
+        xtts_ds = False
+
+    xtts_clat = bool(cfg.get("xtts_cache_conditioning_latents", True))
+    _ev_xcl = os.environ.get("NARRATOR_XTTS_CACHE_CONDITIONING_LATENTS", "").strip().lower()
+    if _ev_xcl in ("0", "false", "no", "off"):
+        xtts_clat = False
+    elif _ev_xcl in ("1", "true", "yes", "on"):
+        xtts_clat = True
+
+    xtts_istr = bool(cfg.get("xtts_inference_stream", False))
+    _ev_xis = os.environ.get("NARRATOR_XTTS_INFERENCE_STREAM", "").strip().lower()
+    if _ev_xis in ("1", "true", "yes", "on"):
+        xtts_istr = True
+    elif _ev_xis in ("0", "false", "no", "off"):
+        xtts_istr = False
+
+    try:
+        xtts_scs = int(cfg.get("xtts_stream_chunk_size", 20))
+    except (TypeError, ValueError):
+        xtts_scs = 20
+    xtts_scs = max(1, min(512, xtts_scs))
+    try:
+        xtts_sol = int(cfg.get("xtts_stream_overlap_wav_len", 1024))
+    except (TypeError, ValueError):
+        xtts_sol = 1024
+    xtts_sol = max(64, min(8192, xtts_sol))
+
+    piper_cudnn = str(cfg.get("piper_onnx_cudnn_conv_algo_search", "heuristic")).strip().lower()
+    if piper_cudnn not in ("heuristic", "exhaustive", "default"):
+        piper_cudnn = "heuristic"
+    _ev_pcudnn = os.environ.get("NARRATOR_PIPER_ONNX_CUDNN_CONV_ALGO_SEARCH", "").strip().upper()
+    if _ev_pcudnn in ("HEURISTIC", "EXHAUSTIVE", "DEFAULT"):
+        piper_cudnn = _ev_pcudnn.lower()
+
+    try:
+        piper_intra = int(cfg.get("piper_onnx_intra_op_num_threads", 0) or 0)
+    except (TypeError, ValueError):
+        piper_intra = 0
+    piper_intra = max(0, min(64, piper_intra))
+    try:
+        piper_inter = int(cfg.get("piper_onnx_inter_op_num_threads", 0) or 0)
+    except (TypeError, ValueError):
+        piper_inter = 0
+    piper_inter = max(0, min(64, piper_inter))
+
     # Env overrides TOML/CLI for live-rate playback tuning (see wav_play_win32).
     _ev_slack = os.environ.get("NARRATOR_LIVE_RATE_SLACK_MS", "").strip()
     if _ev_slack:
@@ -956,10 +1036,20 @@ def build_runtime_settings(
         xtts_speaker_wav=xsw_e,
         xtts_split_sentences=xtts_ss,
         xtts_torch_inference_mode=xtts_im,
+        xtts_torch_autocast=xtts_ac,
+        xtts_autocast_dtype=xtts_adt,
+        xtts_use_deepspeed=xtts_ds,
+        xtts_cache_conditioning_latents=xtts_clat,
+        xtts_inference_stream=xtts_istr,
+        xtts_stream_chunk_size=xtts_scs,
+        xtts_stream_overlap_wav_len=xtts_sol,
         piper_voice=str(pvoice).strip() if pvoice else DEFAULT_PIPER_VOICE_ID,
         piper_model_dir=str(pdir).strip() if pdir else None,
         piper_model_path=str(ppath).strip() if ppath else None,
         piper_cuda=bool(pcuda),
+        piper_onnx_cudnn_conv_algo_search=piper_cudnn,
+        piper_onnx_intra_op_num_threads=piper_intra,
+        piper_onnx_inter_op_num_threads=piper_inter,
         listen_engine=le_s,
         whisper_model=str(wm).strip() or "base",
         whisper_device=wd_s,
