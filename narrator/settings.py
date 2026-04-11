@@ -112,7 +112,11 @@ class RuntimeSettings:
     # How many upcoming WAV segments to buffer while playing (worker producer queue; env NARRATOR_SPEAK_PREFETCH_DEPTH).
     speak_prefetch_depth: int = 4
     # Multi-segment speaks: merge segment WAVs into one PCM stream (VoxCPM-style decode-then-concat) before playback.
-    speak_audio_stream_compile: bool = True
+    # Default ``false``: prefetch + chained play matches VoxCPM-style *streaming* time-to-first-audio better than compiling all segments first.
+    speak_audio_stream_compile: bool = False
+    # After startup: preload neural TTS (Piper/XTTS) and optionally run a tiny synthesis (VoxCPM-style post-load warmup).
+    speak_warmup_on_start: bool = True
+    speak_warmup_synthesize: bool = True
     # VoxCPM-like text stages before TTS (markdown/emoji cleanup + optional wetext ``normalize``); see voxcpm_text_pipeline.py.
     speak_voxcpm_text_pipeline: bool = True
     speak_voxcpm_text_normalize: bool = False
@@ -842,12 +846,26 @@ def build_runtime_settings(
             pass
     spd_final = max(1, min(32, spd_i))
 
-    sac_compile = bool(cfg.get("speak_audio_stream_compile", True))
+    sac_compile = bool(cfg.get("speak_audio_stream_compile", False))
     _ev_sac = os.environ.get("NARRATOR_SPEAK_AUDIO_STREAM_COMPILE", "").strip().lower()
     if _ev_sac in ("0", "false", "no", "off"):
         sac_compile = False
     elif _ev_sac in ("1", "true", "yes", "on"):
         sac_compile = True
+
+    warm_on = bool(cfg.get("speak_warmup_on_start", True))
+    _ev_warm = os.environ.get("NARRATOR_SPEAK_WARMUP_ON_START", "").strip().lower()
+    if _ev_warm in ("0", "false", "no", "off"):
+        warm_on = False
+    elif _ev_warm in ("1", "true", "yes", "on"):
+        warm_on = True
+
+    warm_syn = bool(cfg.get("speak_warmup_synthesize", True))
+    _ev_wsyn = os.environ.get("NARRATOR_SPEAK_WARMUP_SYNTHESIZE", "").strip().lower()
+    if _ev_wsyn in ("0", "false", "no", "off"):
+        warm_syn = False
+    elif _ev_wsyn in ("1", "true", "yes", "on"):
+        warm_syn = True
 
     sv_pipe = bool(cfg.get("speak_voxcpm_text_pipeline", True))
     _ev_svp = os.environ.get("NARRATOR_SPEAK_VOXCPM_TEXT_PIPELINE", "").strip().lower()
@@ -974,6 +992,8 @@ def build_runtime_settings(
         speak_chunk_context_trim_ms=scc_tms_f,
         speak_prefetch_depth=spd_final,
         speak_audio_stream_compile=sac_compile,
+        speak_warmup_on_start=warm_on,
+        speak_warmup_synthesize=warm_syn,
         speak_voxcpm_text_pipeline=sv_pipe,
         speak_voxcpm_text_normalize=sv_norm,
         live_rate_resume_slack_ms=lr_slack_f,

@@ -777,7 +777,7 @@ def _speak_worker_loop_impl(event_queue: queue.Queue, settings: RuntimeSettings)
             set_phase(Phase.IDLE)
             continue
 
-        compile_mode = bool(getattr(settings, "speak_audio_stream_compile", True)) and len(work_items) > 1
+        compile_mode = bool(getattr(settings, "speak_audio_stream_compile", False)) and len(work_items) > 1
 
         if compile_mode:
             state = CompiledUtteranceState()

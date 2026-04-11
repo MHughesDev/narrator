@@ -511,6 +511,19 @@ def main() -> None:
     speak_thread.start()
     listen_thread.start()
 
+    if bool(getattr(settings, "speak_warmup_on_start", True)):
+        try:
+            from narrator.speak_warmup import warmup_speak_stack
+
+            threading.Thread(
+                target=warmup_speak_stack,
+                args=(settings,),
+                name="narrator-speak-warmup",
+                daemon=True,
+            ).start()
+        except Exception as e:
+            logging.debug("speak warmup thread not started: %s", e)
+
     if args.tray:
         try:
             from narrator.tray_mode import run_with_tray

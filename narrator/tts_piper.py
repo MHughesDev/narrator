@@ -107,6 +107,11 @@ def resolve_piper_onnx_path(
 _voice_cache: dict[tuple[str, bool], Any] = {}
 
 
+def ensure_piper_voice_loaded(settings: "RuntimeSettings") -> None:
+    """Load the Piper ONNX voice into the process cache (no synthesis). For cold-start warmup."""
+    _get_piper_voice(settings)
+
+
 def _get_piper_voice(settings: "RuntimeSettings") -> Any:
     from piper.voice import PiperVoice
 
