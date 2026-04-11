@@ -87,6 +87,13 @@ def get_tts(settings: "RuntimeSettings"):
                 "(see docs/SETUP.md).",
             )
         _tts = TTS(model_name=model, gpu=gpu, progress_bar=False)
+        try:
+            import torch
+
+            dev = "cuda" if gpu and torch.cuda.is_available() else "cpu"
+            _tts = _tts.to(dev)
+        except Exception as e:
+            logger.debug("Coqui TTS .to(device) skipped: %s", e)
         _cached_model = model
         _cached_gpu = gpu
         return _tts
@@ -234,8 +241,9 @@ def _tts_to_file_one(
     speaker: Optional[str],
     spath: Optional[Path],
     lang: str,
+    split_sentences: bool,
+    use_inference_mode: bool,
 ) -> None:
-    split_sentences = False
     common: dict = dict(
         text=text,
         file_path=str(out_path),
@@ -244,10 +252,23 @@ def _tts_to_file_one(
     )
     if "speed" in inspect.signature(tts.tts_to_file).parameters:
         common["speed"] = 1.0
-    if spath is not None:
-        tts.tts_to_file(speaker_wav=str(spath), **common)
+
+    def _run() -> None:
+        if spath is not None:
+            tts.tts_to_file(speaker_wav=str(spath), **common)
+        else:
+            tts.tts_to_file(speaker=speaker, **common)
+
+    if use_inference_mode:
+        try:
+            import torch
+
+            with torch.inference_mode():
+                _run()
+        except Exception:
+            _run()
     else:
-        tts.tts_to_file(speaker=speaker, **common)
+        _run()
 
 
 def synthesize_xtts_to_path(path: Path, text: str, settings: "RuntimeSettings") -> None:
@@ -288,8 +309,20 @@ def synthesize_xtts_to_path(path: Path, text: str, settings: "RuntimeSettings") 
     if not pieces:
         raise ValueError("empty text for XTTS")
 
+    coqui_split = bool(getattr(settings, "xtts_split_sentences", False))
+    infer_mode = bool(getattr(settings, "xtts_torch_inference_mode", True))
+
     if len(pieces) == 1:
-        _tts_to_file_one(tts, pieces[0], path, speaker=speaker, spath=spath, lang=lang)
+        _tts_to_file_one(
+            tts,
+            pieces[0],
+            path,
+            speaker=speaker,
+            spath=spath,
+            lang=lang,
+            split_sentences=coqui_split,
+            use_inference_mode=infer_mode,
+        )
     else:
         tmp_paths: list[Path] = []
         try:
@@ -298,7 +331,16 @@ def synthesize_xtts_to_path(path: Path, text: str, settings: "RuntimeSettings") 
                 os.close(fd)
                 tp = Path(name)
                 tmp_paths.append(tp)
-                _tts_to_file_one(tts, piece, tp, speaker=speaker, spath=spath, lang=lang)
+                _tts_to_file_one(
+                    tts,
+                    piece,
+                    tp,
+                    speaker=speaker,
+                    spath=spath,
+                    lang=lang,
+                    split_sentences=coqui_split,
+                    use_inference_mode=infer_mode,
+                )
             _concat_wav_files(tmp_paths, path)
         finally:
             for tp in tmp_paths:

@@ -27,4 +27,34 @@
 - **Fastest first speech** on neural engines: keep **`speak_audio_stream_compile = false`**, enable warmup (defaults), avoid LLM text pass if not needed (`speak_text_llm_force_for_neural = false`), use **`scripts/prefetch_xtts_model.py`** so weights are already on disk.
 - **Smoothest single-file playback** for long multi-segment speaks: set **`speak_audio_stream_compile = true`** (accept longer wait before audio starts).
 
+## Beyond VoxCPM — Coqui XTTS (research / community)
+
+Narrator is not VoxCPM, but **Coqui XTTS** has well-known levers ([XTTS docs](https://github.com/coqui-ai/TTS/blob/dev/docs/source/models/xtts.md), [HF discussion](https://huggingface.co/coqui/XTTS-v2/discussions/10)):
+
+| Technique | Notes |
+|-----------|--------|
+| **Keep the model loaded** | We cache one `TTS` instance in-process (`get_tts`). Avoid restarting the app between speaks. |
+| **`split_sentences`** | Coqui’s `tts_to_file(..., split_sentences=True)` runs **one forward pass per sentence**. Narrator already splits long text in `synthesize_xtts_to_path`; we default **`xtts_split_sentences = false`** so each Narrator chunk is **one** Coqui call when possible. Set `true` only if you hit length limits on huge single chunks. Env: `NARRATOR_XTTS_SPLIT_SENTENCES`. |
+| **`torch.inference_mode()`** | Optional wrapper around synthesis (default **on** via `xtts_torch_inference_mode`) — small autograd overhead reduction. Env: `NARRATOR_XTTS_TORCH_INFERENCE_MODE`. |
+| **`.to("cuda")`** | After load, we move the Coqui `TTS` module to GPU when `gpu=True` so parameters follow the documented pattern. |
+| **DeepSpeed** | Upstream reports lower latency with `use_deepspeed=True` on **manual** `Xtts` checkpoint loading — not exposed by our high-level `TTS` API path; advanced users would need a custom integration. |
+| **Cache `gpt_cond_latent` / `speaker_embedding`** | For a **fixed** `speaker_wav`, Coqui docs recommend caching conditioning latents between calls. We do not cache these yet (speaker or reference can change per settings); a future optimization could cache keyed by resolved WAV path + model id. |
+| **Streaming `inference_stream`** | Coqui supports chunk streaming for faster **first** audio; our pipeline is file-based (`tts_to_file`). Adopting it would mean a larger worker/playback refactor. |
+
+## Piper / ONNX (GPU)
+
+- **`piper_cuda = true`** uses the Piper ONNX path on GPU when `onnxruntime-gpu` matches your CUDA stack.
+- ONNX Runtime tuning (TensorRT EP, CUDA EP `cudnn_conv_algo_search`, I/O binding) is **outside** the `piper-tts` Python API we call — worth profiling only if Piper is your primary engine.
+
+## System-level ideas (brainstorm)
+
+| Idea | Tradeoff |
+|------|----------|
+| **Prefer WinRT** for instant first audio on Windows when quality is acceptable — no multi‑GB GPU model load. |
+| **Smaller / faster models** — Piper is lighter than XTTS; `xtts_v2` vs `v1.1` has different speaker and speed profiles (try benchmarks on your GPU). |
+| **Disable LLM text pass** for neural engines when you do not need cleanup (`speak_text_llm_force_for_neural = false`, `speak_text_llm_enabled = false`). |
+| **Raise `speak_prefetch_depth`** when using parallel synth workers so the queue stays full during long documents. |
+| **Avoid `speak_chunk_context_enabled`** or shorten context if XTTS work per segment dominates. |
+| **Single GPU process** — running Ollama + Narrator + XTTS on one card competes for VRAM; closing other GPU apps helps. |
+
 See also [`settings_schema.md`](../narrator/settings_schema.md) for all keys and env overrides.

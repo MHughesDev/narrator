@@ -32,6 +32,11 @@ class RuntimeSettings:
     xtts_language: str = "en"
     xtts_device: str = "auto"
     xtts_speaker_wav: Optional[str] = None
+    # Coqui ``tts_to_file(..., split_sentences=True)`` runs one forward pass per sentence (higher latency).
+    # Narrator already chunks text in ``synthesize_xtts_to_path`` — default **false** = fewer GPU round-trips.
+    xtts_split_sentences: bool = False
+    # Wrap XTTS synthesis in ``torch.inference_mode()`` when available (slightly less autograd overhead).
+    xtts_torch_inference_mode: bool = True
     # Piper TTS (optional extra speak-piper): ONNX + JSON from rhasspy/piper-voices.
     piper_voice: str = DEFAULT_PIPER_VOICE_ID
     piper_model_dir: Optional[str] = None
@@ -745,6 +750,20 @@ def build_runtime_settings(
     xsw = xtts_speaker_wav if xtts_speaker_wav is not None else cfg.get("xtts_speaker_wav")
     xsw_e = str(xsw).strip() if xsw else None
 
+    xtts_ss = bool(cfg.get("xtts_split_sentences", False))
+    _ev_xss = os.environ.get("NARRATOR_XTTS_SPLIT_SENTENCES", "").strip().lower()
+    if _ev_xss in ("1", "true", "yes", "on"):
+        xtts_ss = True
+    elif _ev_xss in ("0", "false", "no", "off"):
+        xtts_ss = False
+
+    xtts_im = bool(cfg.get("xtts_torch_inference_mode", True))
+    _ev_xim = os.environ.get("NARRATOR_XTTS_TORCH_INFERENCE_MODE", "").strip().lower()
+    if _ev_xim in ("0", "false", "no", "off"):
+        xtts_im = False
+    elif _ev_xim in ("1", "true", "yes", "on"):
+        xtts_im = True
+
     # Env overrides TOML/CLI for live-rate playback tuning (see wav_play_win32).
     _ev_slack = os.environ.get("NARRATOR_LIVE_RATE_SLACK_MS", "").strip()
     if _ev_slack:
@@ -935,6 +954,8 @@ def build_runtime_settings(
         xtts_language=str(xl).strip() or "en",
         xtts_device=xd_s,
         xtts_speaker_wav=xsw_e,
+        xtts_split_sentences=xtts_ss,
+        xtts_torch_inference_mode=xtts_im,
         piper_voice=str(pvoice).strip() if pvoice else DEFAULT_PIPER_VOICE_ID,
         piper_model_dir=str(pdir).strip() if pdir else None,
         piper_model_path=str(ppath).strip() if ppath else None,

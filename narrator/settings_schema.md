@@ -72,6 +72,8 @@ Files are merged in order; later files override earlier keys. Standard paths: `%
 | `xtts_language` | string | `en` | XTTS language code. |
 | `xtts_device` | string | `auto` | `auto`, `cpu`, or `cuda`. |
 | `xtts_speaker_wav` | string | — | Optional reference WAV for voice cloning (overrides speaker / voice). |
+| `xtts_split_sentences` | bool | `false` | Coqui: when `true`, splits each chunk into sentences and synthesizes separately (more round-trips, often **slower**). Default **false** — Narrator already chunks long text; use `true` only if you hit model length limits. Env: `NARRATOR_XTTS_SPLIT_SENTENCES`. |
+| `xtts_torch_inference_mode` | bool | `true` | Wrap XTTS `tts_to_file` in ``torch.inference_mode()`` when PyTorch is available. Env: `NARRATOR_XTTS_TORCH_INFERENCE_MODE`. |
 | `live_rate_resume_slack_ms` | float | `280` | Extra milliseconds of PCM skipped ahead after `waveOutGetPosition` when using **sample-accurate** seek (chunk discard off). Ignored when chunk discard is on. |
 | `post_waveout_close_drain_s` | float | `0.35` | Seconds to sleep after `waveOutClose` before reopening the device on live rate change. |
 | `live_rate_safe_chunk_discard` | bool | `true` | **Recommended default:** resume at the **next** chunk boundary (do not use `waveOutGetPosition` for the cut) — avoids echo when the driver lags the DAC. Set `false` for sample-accurate seek (smaller gaps; may echo). Env: `NARRATOR_LIVE_RATE_ACCURATE_SEEK=1` forces accurate seek; `NARRATOR_LIVE_RATE_SAFE=1` forces chunk discard. |
