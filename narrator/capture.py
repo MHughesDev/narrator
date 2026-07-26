@@ -77,6 +77,34 @@ def _text_or_value(ctrl: auto.Control) -> Optional[str]:
     return None
 
 
+def _selected_text_from_focus() -> Optional[str]:
+    """Return currently selected/highlighted text from the focused UIA element, or None."""
+    try:
+        focused = auto.GetFocusedControl()
+    except Exception:
+        return None
+    if not focused:
+        return None
+    for ctrl in _ancestors_from(focused):
+        if _is_chrome_control(ctrl):
+            continue
+        try:
+            tp = ctrl.GetTextPattern()
+            if not tp:
+                continue
+            ranges = tp.GetSelection()
+            if not ranges:
+                continue
+            parts = [r.GetText(-1) for r in ranges if r]
+            text = " ".join(p for p in parts if p and p.strip())
+            if text.strip():
+                logger.debug("capture: selected text from %s", ctrl.ControlTypeName)
+                return text.strip()
+        except Exception as e:
+            logger.debug("GetSelection on %s failed: %s", getattr(ctrl, "ControlTypeName", "?"), e)
+    return None
+
+
 def _safe_text_from_pattern(control: auto.Control) -> Optional[str]:
     try:
         tp = control.GetTextPattern()
@@ -150,6 +178,10 @@ def capture_at_cursor() -> Optional[str]:
     the deepest ``Document`` / ``Edit`` under the hit, and exclude menu/toolbar/title
     controls from the legacy "longest string" fallback.
     """
+    selected = _selected_text_from_focus()
+    if selected:
+        return selected
+
     try:
         x, y = auto.GetPhysicalCursorPos()
         hit = auto.ControlFromPoint(x, y)
